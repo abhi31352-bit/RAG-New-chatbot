@@ -33,6 +33,16 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw in (None, ""):
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
 @dataclass
 class Config:
     """Runtime configuration. Never holds the API key in a printable form."""
@@ -59,6 +69,12 @@ class Config:
     # Retrieval
     k_fetch: int = 10
     k_context: int = 4
+    # Minimum cosine similarity for the TOP hit to count as a match. 0 disables
+    # the check. Measured spread on this corpus: answerable questions score
+    # 0.40-0.76, unrelated/gibberish input 0.05-0.20, so 0.25 separates them
+    # cleanly. Turning "nothing here is about that" into an empty result set is
+    # what lets the answer contract say "not found" instead of inventing one.
+    min_score: float = 0.25
 
     # Sub-directories derived from data_dir
     raw_dir: Path = field(init=False)
@@ -135,6 +151,7 @@ def get_config() -> Config:
             chunk_min_chars=_env_int("CHUNK_MIN_CHARS", 120),
             k_fetch=_env_int("K_FETCH", 10),
             k_context=_env_int("K_CONTEXT", 4),
+            min_score=_env_float("MIN_SCORE", 0.25),
         )
         _CONFIG.ensure_dirs()
     return _CONFIG
