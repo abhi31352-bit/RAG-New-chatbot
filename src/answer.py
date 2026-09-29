@@ -118,6 +118,7 @@ class AnswerEngine:
         question: str,
         chunks: Optional[Sequence[RetrievedChunk]] = None,
         skip_retrieval: bool = False,
+        history: str = "",
     ) -> Answer:
         """Answer `question`, enforcing the contract on whatever comes back.
 
@@ -126,6 +127,11 @@ class AnswerEngine:
         written through guardrails.log_question so a question containing PII is
         redacted rather than stored. A refusal is terminal -- no retrieval, no
         network call, nothing leaves the machine.
+
+        `history` is a pre-rendered HISTORY block (see src/memory.py). It is
+        passed in rather than owned here so this class stays stateless with
+        respect to conversation, and the caller stays the single owner of the
+        window.
         """
         question = (question or "").strip()
         if not question:
@@ -159,7 +165,7 @@ class AnswerEngine:
                 reason="retrieval returned no grounded chunks",
             )
 
-        messages = build_messages(question, resolved)
+        messages = build_messages(question, resolved, history=history)
         try:
             raw = self._llm().chat(messages)
         except LLMError as error:

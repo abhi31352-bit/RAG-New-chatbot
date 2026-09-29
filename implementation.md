@@ -643,7 +643,11 @@ src/app.py
    even if link rendering fails.
 9. Read-only on the store. If `data/chroma/` is missing, show
    *"Index not built — run `python -m src.ingest`"*. **Never auto-ingest.**
-10. Transcript in `st.session_state` for display only — **not** fed back into the prompt.
+10. Transcript in `st.session_state` for display. Conversation memory (a bounded
+    10-turn window) **is** passed to the prompt, but only via `src/memory.py`,
+    which re-classifies every turn with the guardrails (PII → `<redacted:pii>`,
+    advice/performance/out-of-scope → dropped) and labels the block as not a
+    source of facts. See ADR-011.
 
 **Notes**
 - Show the retrieved chunk count or an expander with the sources used. It makes the RAG

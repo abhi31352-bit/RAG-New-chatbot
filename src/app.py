@@ -18,8 +18,10 @@ Design constraints that are deliberate, not incidental:
   * The store is read-only. If the index is missing the app says how to build it
     and stops. It never ingests on startup -- a demo must not re-scrape or
     re-embed, and a 25s re-embed on page load is a good way to look broken.
-  * The transcript is for display only. It is never fed back into the prompt, so
-    the model cannot be steered by conversation history into giving advice.
+  * The transcript is for display only. Conversation history reaches the model
+    only through src/memory.py, which re-classifies every turn before rendering
+    it and labels the block as not-a-source. See that module for why the
+    original "never feed history back" rule was narrowed rather than kept.
 """
 from __future__ import annotations
 
@@ -38,7 +40,12 @@ from src.answer import Answer, AnswerEngine
 from src.config import get_config
 from src.guardrails import Verdict, classify_question
 from src.llm import LLMClient
+from src.memory import ConversationMemory
 from src.retrieve import RetrievedChunk, Retriever
+
+# Chunks handed to the model per question. Read from the same config the
+# retriever uses, so the sidebar cannot disagree with the pipeline.
+K_CONTEXT = get_config().k_context
 
 # --- Copy. Verbatim from PRD Appendix A / B. --------------------------------
 
@@ -64,6 +71,11 @@ EXAMPLE_QUESTIONS = [
 ]
 
 PERSISTENT_NOTE = "Facts-only. No investment advice."
+
+# Prior turns kept for reference resolution ("what about its exit load?").
+# Every turn is re-classified by the guardrails before it reaches the prompt, so
+# this widens the model's view without widening what it may be told.
+MEMORY_WINDOW = 10
 
 
 # --- Cached resources. Load once per process. --------------------------------
@@ -160,8 +172,12 @@ def main() -> None:
 
     if "transcript" not in st.session_state:
         st.session_state.transcript = []
+    if "memory" not in st.session_state:
+        st.session_state.memory = ConversationMemory(window=MEMORY_WINDOW)
     if "show_sources" not in st.session_state:
         st.session_state.show_sources = False
+
+    memory: ConversationMemory = st.session_state.memory
 
     for entry in st.session_state.transcript:
         with st.chat_message(entry["role"]):
@@ -195,6 +211,15 @@ def main() -> None:
     with st.chat_message("user"):
         st.markdown(question)
 
+    # A pronoun with no referent cannot retrieve anything. Fold in the scheme the
+    # conversation is already about. The user still sees their own wording: this
+    # only changes what we search for.
+    resolved_question, was_resolved = memory.resolve(question)
+    if was_resolved:
+        st.caption(
+            f"Resolving the reference as: *{resolved_question}*"
+        )
+
     with st.chat_message("assistant"):
         try:
             # Guardrails first, exactly as the terminal path does. This is a
@@ -202,21 +227,43 @@ def main() -> None:
             # classifies again internally, so the UI cannot skip it.
             verdict = classify_question(question)
             if verdict is not Verdict.OK:
-                answer = Answer(text="", kind="refused")
                 from src.guardrails import refusal as build_refusal
-                answer.text = build_refusal(verdict)
+                answer = Answer(text=build_refusal(verdict), kind="refused",
+                                reason=f"guardrail:{verdict.value}")
+                chunks = None
             else:
-                chunks = retrieve_cached(question)
-                answer = get_engine().answer(question, chunks=chunks)
+                # Classify the RESOLVED form too: a follow-up can only become
+                # unsafe by being completed ("what about its returns?" is safe
+                # alone, unsafe once it refers to a scheme).
+                resolved_verdict = classify_question(resolved_question)
+                if resolved_verdict is not Verdict.OK:
+                    from src.guardrails import refusal as build_refusal
+                    answer = Answer(
+                        text=build_refusal(resolved_verdict), kind="refused",
+                        reason=f"guardrail:{resolved_verdict.value}",
+                    )
+                    chunks = None
+                else:
+                    chunks = retrieve_cached(resolved_question)
+                    answer = get_engine().answer(
+                        resolved_question,
+                        chunks=chunks,
+                        history=memory.render(),
+                    )
             st.markdown(answer.text)
-            render_answer(answer, st.session_state.show_sources,
-                          chunks if verdict is Verdict.OK else None)
+            render_answer(answer, st.session_state.show_sources, chunks)
         except Exception as error:  # noqa: BLE001 - a demo must not show a traceback
             st.error(
                 "Something went wrong handling that question. Try rephrasing it."
             )
             st.caption(f"({type(error).__name__})")
             logging.getLogger("app").exception("query failed")
+            answer = Answer(text="", kind="error", reason=type(error).__name__)
+
+    # Every exchange is recorded, including refusals, so a follow-up to a
+    # refused question still resolves against what was actually asked.
+    memory.add(question, answer.text, kind=answer.kind,
+               source_url=answer.source_url)
 
     st.session_state.transcript.extend(
         [
@@ -229,6 +276,9 @@ def main() -> None:
             },
         ]
     )
+    # Bound the display transcript too, or a long session grows it without limit.
+    if len(st.session_state.transcript) > 2 * MEMORY_WINDOW:
+        st.session_state.transcript = st.session_state.transcript[-2 * MEMORY_WINDOW:]
 
     st.markdown("---")
     st.caption(PERSISTENT_NOTE)
@@ -242,6 +292,20 @@ def main() -> None:
             value=st.session_state.show_sources,
             help="Makes the RAG visible: which chunks the answer was built from.",
         )
+        st.markdown("---")
+        st.subheader("Context")
+        st.markdown(f"**{K_CONTEXT}** chunks per question")
+        st.caption(
+            f"Conversation memory: last **{len(memory)}** of "
+            f"{MEMORY_WINDOW} turns, used to resolve references like "
+            f"\"what about its exit load?\". Every turn is re-checked by the "
+            f"guardrails before it reaches the model, and history is never "
+            f"treated as a source of facts."
+        )
+        if memory:
+            if st.button("Clear conversation memory"):
+                memory.clear()
+                st.rerun()
         st.markdown("---")
         st.subheader("Indexed schemes")
         for scheme in ("Large Cap", "Flexi Cap", "ELSS Tax Saver",

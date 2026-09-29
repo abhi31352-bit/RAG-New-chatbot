@@ -38,17 +38,27 @@ def build_user_prompt(
     question: str,
     chunks: Sequence,
     max_chars_per_chunk: int = 900,
+    history: str = "",
 ) -> str:
     """Numbered context blocks, then the question last.
 
     Args:
         chunks: RetrievedChunk objects (or anything with `.text`, `.scheme_id`,
             `.section`, `.source_url`).
+        history: optional rendered HISTORY block from ConversationMemory. It sits
+            ABOVE the context and is explicitly labelled as not-a-source, so a
+            prior answer can never be mistaken for a citable fact.
     """
-    blocks: List[str] = [
+    blocks: List[str] = []
+
+    if history.strip():
+        blocks.append(history.rstrip())
+        blocks.append("")
+
+    blocks.extend([
         "CONTEXT (the only permitted source of facts):",
         "",
-    ]
+    ])
 
     for index, chunk in enumerate(chunks, start=1):
         text = chunk.text.strip()
@@ -70,11 +80,16 @@ def build_user_prompt(
     return "\n".join(blocks)
 
 
-def build_messages(question: str, chunks: Iterable) -> List[dict]:
+def build_messages(question: str, chunks: Iterable, history: str = "") -> List[dict]:
     """Chat-completion payload for the Groq client."""
     return [
         {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": build_user_prompt(question, list(chunks))},
+        {
+            "role": "user",
+            "content": build_user_prompt(
+                question, list(chunks), history=history
+            ),
+        },
     ]
 
 

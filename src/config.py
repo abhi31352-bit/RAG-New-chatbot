@@ -68,7 +68,7 @@ class Config:
 
     # Retrieval
     k_fetch: int = 10
-    k_context: int = 4
+    k_context: int = 10
     # Minimum cosine similarity for the TOP hit to count as a match. 0 disables
     # the check. Measured spread on this corpus: answerable questions score
     # 0.40-0.76, unrelated/gibberish input 0.05-0.20, so 0.25 separates them
@@ -150,7 +150,7 @@ def get_config() -> Config:
             chunk_overlap=_env_int("CHUNK_OVERLAP", 120),
             chunk_min_chars=_env_int("CHUNK_MIN_CHARS", 120),
             k_fetch=_env_int("K_FETCH", 10),
-            k_context=_env_int("K_CONTEXT", 4),
+            k_context=_env_int("K_CONTEXT", 10),
             min_score=_env_float("MIN_SCORE", 0.25),
         )
         _CONFIG.ensure_dirs()
