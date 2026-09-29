@@ -15,7 +15,16 @@ import logging
 import pytest
 
 from src import guardrails
-from src.guardrails import PATTERNS, Verdict, classify, matched_patterns, redact, refusal
+from src.guardrails import (
+    PATTERNS,
+    Verdict,
+    classify,
+    classify_question,
+    is_out_of_scope,
+    matched_patterns,
+    redact,
+    refusal,
+)
 
 # --- Positives: one per pattern ------------------------------------------------
 
@@ -219,6 +228,65 @@ def test_refusal_is_terminal_text_only():
         out = refusal(verdict).lower()
         assert "you should" not in out
         assert "%" not in out
+
+
+# --- Out of scope (subject check, not a pattern) ------------------------------
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "What is the expense ratio of Mirae Large Cap fund?",
+        "Tell me about the Nippon India Small Cap scheme",
+        "What is the exit load of an ICICI Prudential fund?",
+        "expense ratio of Kotak Flexicap fund",
+    ],
+)
+def test_out_of_scope_fund_is_refused(text: str):
+    assert classify_question(text) is Verdict.OUT_OF_SCOPE
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # All five indexed schemes must stay in scope, including ELSS.
+        "What is the expense ratio of HDFC Large Cap?",
+        "What is the lock-in period for HDFC ELSS?",
+        "What is the benchmark of HDFC Balanced Advantage Fund?",
+        "What is the minimum SIP for HDFC Flexi Cap?",
+        "What is the exit load on HDFC Small Cap?",
+        # No fund named: must not be swept up as out-of-scope.
+        "What is the exit load?",
+        "What is the NAV?",
+        "Who manages the fund?",
+        # HDFC named alongside another fund: HDFC wins, stay in scope.
+        "HDFC Large Cap vs Mirae Large Cap expense ratio?",
+    ],
+)
+def test_in_scope_questions_are_not_out_of_scope(text: str):
+    assert is_out_of_scope(text) is False
+
+
+def test_out_of_scope_ranks_below_advice():
+    """A question that is both out-of-scope and advice still refuses as advice."""
+    text = "Should I buy the Mirae Large Cap fund?"
+    assert classify_question(text) is Verdict.ADVICE
+
+
+def test_out_of_scope_ranks_below_pii():
+    text = "My PAN is ABCDE1234F, what is the Mirae Large Cap expense ratio?"
+    assert classify_question(text) is Verdict.PII
+
+
+def test_out_of_scope_refusal_has_a_link():
+    assert "http" in refusal(Verdict.OUT_OF_SCOPE)
+
+
+def test_classify_alone_does_not_do_subject_check():
+    """classify() stays a pure regex table; classify_question() adds the subject."""
+    text = "What is the expense ratio of Mirae Large Cap fund?"
+    assert classify(text) is Verdict.OK
+    assert classify_question(text) is Verdict.OUT_OF_SCOPE
 
 
 # --- Normalisation -------------------------------------------------------------

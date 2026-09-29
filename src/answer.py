@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from typing import List, Optional, Sequence
 
 from .config import get_config
-from .guardrails import Verdict, classify, log_question, refusal
+from .guardrails import Verdict, classify_question, log_question, refusal
 from .llm import LLMClient, LLMError, get_client
 from .prompts import build_messages
 from .retrieve import RetrievedChunk, Retriever
@@ -134,7 +134,7 @@ class AnswerEngine:
                 reason="empty question",
             )
 
-        verdict = classify(question)
+        verdict = classify_question(question)
         log_question(question)
         if verdict is not Verdict.OK:
             LOGGER.info("refused pre-LLM: verdict=%s", verdict.value)

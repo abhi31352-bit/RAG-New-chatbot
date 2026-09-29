@@ -50,8 +50,9 @@ class Verdict(enum.Enum):
 PRECEDENCE = {
     Verdict.PII: 0,
     Verdict.ADVICE: 1,
-    Verdict.PERFORMANCE: 2,
-    Verdict.OK: 3,
+    Verdict.OUT_OF_SCOPE: 2,
+    Verdict.PERFORMANCE: 3,
+    Verdict.OK: 4,
 }
 
 
@@ -244,13 +245,60 @@ def normalize(text: str) -> str:
     return re.sub(r"\s+", " ", text or "").strip()
 
 
+def matched_patterns(text: str) -> List[str]:
+    """Ids of every pattern that fired, for logging and tests."""
+    normalized = normalize(text)
+    return [p.id for p in PATTERNS if p.regex.search(normalized)]
+
+
+# A named fund that is not one of the five. This is a check on the SUBJECT, not
+# a regex over intent, so it lives outside PATTERNS -- but it produces the same
+# Verdict and the same terminal refusal, because the honest answer to "what is
+# the expense ratio of Mirae Large Cap?" is "I don't cover that fund", not
+# "I looked and found nothing" -- which is what a not_found answer implies.
+OUT_OF_SCOPE_FUNDS = (
+    "parag axis", "nippon", "icici", "sbi", "kotak", "mirae", "axis",
+    "dsp", "tata", "bandhan", "canara", "sundaram", "principal",
+    "muthoot", "bajaj", "barclays", "invesco", "franklin", "abrdn",
+    "motilal", "jm financial", "l&T", "quant", "ppf",
+)
+
+# Indicates a FUND is the subject of the question. Needed so that a bare
+# finance word does not trigger an out-of-scope refusal.
+_FUND_SUBJECT = re.compile(
+    r"(?i)\b(fund|scheme|etf|mutual\s+fund)\b|\b[A-Z]{2,}\s+[A-Z][a-z]"
+)
+
+
+def is_out_of_scope(text: str) -> bool:
+    """True when the question names a fund that is not one of the five.
+
+    Conservative on purpose. It fires only when an out-of-scope name AND a
+    fund-subject word are both present, and never when "hdfc" appears, because
+    the five indexed schemes are all HDFC and "HDFC ELSS" is in scope. Without
+    those conditions "What is the exit load?" would be refused for containing a
+    finance term, and a bare "elss" would be refused despite HDFC ELSS being
+    indexed.
+    """
+    normalized = normalize(text).lower()
+    if "hdfc" in normalized:
+        return False
+    if not _FUND_SUBJECT.search(text or ""):
+        return False
+    return any(other in normalized for other in OUT_OF_SCOPE_FUNDS)
+
+
 def classify(text: str) -> Verdict:
-    """Classify a question. Precedence PII > ADVICE > PERFORMANCE.
+    """Classify a question. Precedence PII > ADVICE > OUT_OF_SCOPE > PERFORMANCE.
 
     Does not short-circuit on the first match: it evaluates every pattern and
     then applies precedence. Short-circuiting would return whichever class
     happened to be listed first, which would let a performance question that also
     contains a PAN be logged.
+
+    PII outranks everything because it is the only class with a storage
+    obligation: a question that is both PII and an advice request must still not
+    be logged.
     """
     normalized = normalize(text)
     if not normalized:
@@ -265,10 +313,19 @@ def classify(text: str) -> Verdict:
     return best
 
 
-def matched_patterns(text: str) -> List[str]:
-    """Ids of every pattern that fired, for logging and tests."""
-    normalized = normalize(text)
-    return [p.id for p in PATTERNS if p.regex.search(normalized)]
+def classify_question(text: str) -> Verdict:
+    """classify(), plus the subject check that PATTERNS cannot express.
+
+    This is the entry point the orchestrator should use. Kept separate from
+    classify() so the pattern catalogue stays a pure, testable regex table.
+    """
+    verdict = classify(text)
+    # Only upgrade from a clean OK. A question that already matched PII, ADVICE
+    # or PERFORMANCE keeps that verdict: those carry a stronger reason to refuse
+    # and a more accurate message than "that fund isn't indexed".
+    if verdict is Verdict.OK and is_out_of_scope(text):
+        return Verdict.OUT_OF_SCOPE
+    return verdict
 
 
 def redact(text: str) -> str:
@@ -279,7 +336,7 @@ def redact(text: str) -> str:
     stored, and GR-4 is about not accepting the value at all. Length is kept
     because a length is not an identifier.
     """
-    if classify(text) is Verdict.PII:
+    if classify_question(text) is Verdict.PII:
         return "<redacted:pii>"
     return normalize(text)
 
@@ -339,6 +396,9 @@ __all__ = [
     "PERFORMANCE_PATTERNS",
     "PRECEDENCE",
     "classify",
+    "classify_question",
+    "is_out_of_scope",
+    "OUT_OF_SCOPE_FUNDS",
     "matched_patterns",
     "normalize",
     "redact",
