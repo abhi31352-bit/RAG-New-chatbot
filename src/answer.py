@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from typing import List, Optional, Sequence
 
 from .config import get_config
+from .guardrails import Verdict, classify, log_question, refusal
 from .llm import LLMClient, LLMError, get_client
 from .prompts import build_messages
 from .retrieve import RetrievedChunk, Retriever
@@ -118,12 +119,29 @@ class AnswerEngine:
         chunks: Optional[Sequence[RetrievedChunk]] = None,
         skip_retrieval: bool = False,
     ) -> Answer:
-        """Answer `question`, enforcing the contract on whatever comes back."""
+        """Answer `question`, enforcing the contract on whatever comes back.
+
+        Order is load-bearing (architecture.md section 7): guardrails run on the
+        raw question BEFORE retrieval and before the LLM, and the log line is
+        written through guardrails.log_question so a question containing PII is
+        redacted rather than stored. A refusal is terminal -- no retrieval, no
+        network call, nothing leaves the machine.
+        """
         question = (question or "").strip()
         if not question:
             return Answer(
                 text=NOT_FOUND_MESSAGE, kind=KIND_NOT_FOUND,
                 reason="empty question",
+            )
+
+        verdict = classify(question)
+        log_question(question)
+        if verdict is not Verdict.OK:
+            LOGGER.info("refused pre-LLM: verdict=%s", verdict.value)
+            return Answer(
+                text=refusal(verdict),
+                kind="refused",
+                reason=f"guardrail:{verdict.value}",
             )
 
         if skip_retrieval:
