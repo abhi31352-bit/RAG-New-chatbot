@@ -146,6 +146,9 @@ def _is_block(tag: Tag) -> bool:
     return bool(getattr(tag, "name", None) in CONTAINER_TAGS)
 
 
+SUMMARY_HEADING = "## Page header summary"
+
+
 def _is_leaf(tag: Tag) -> bool:
     """True when the tag has no *text-bearing* container children.
 
@@ -444,7 +447,11 @@ def html_to_text(html: str) -> str:
 
     structured = extract_structured_facts(html)
     if structured:
-        return f"{structured}\n\n{body}".strip()
+        # Give the rest of the body its own heading. Without this the leading
+        # NAV/return ticker strip is absorbed into "Key scheme facts", so the
+        # highest-value chunk in the corpus ends up carrying 1-day and 3-year
+        # return figures -- the exact data PRD GR-3 forbids (found in Phase 2).
+        return f"{structured}\n\n{SUMMARY_HEADING}\n\n{body}".strip()
     return body
 
 

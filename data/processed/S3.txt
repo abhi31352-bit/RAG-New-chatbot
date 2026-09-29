@@ -17,6 +17,8 @@ Registrar agent: CAMS
 Lock-in period: 3 years
 Riskometer level: Very High
 
+## Page header summary
+
 +11.93 %
 +11.93
 3Y annualised
