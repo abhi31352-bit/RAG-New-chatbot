@@ -23,8 +23,11 @@ LOGGER = logging.getLogger("llm")
 RETRY_STATUS = frozenset({408, 429, 500, 502, 503, 504})
 MAX_ATTEMPTS = 3          # 1 initial + 2 retries
 BACKOFF_SECONDS = (1.0, 3.0)
-TIMEOUT_SECONDS = 20.0
-MAX_TOKENS = 300
+TIMEOUT_SECONDS = 25.0
+# A reasoning model (gpt-oss-120b) can spend most of this on its hidden
+# `reasoning` field before writing any answer text. 300 is not enough for one,
+# and the failure looks like an empty answer rather than an error.
+MAX_TOKENS = 1200
 
 
 class LLMError(RuntimeError):
@@ -88,7 +91,30 @@ class LLMClient:
                     temperature=temperature,
                     max_tokens=max_tokens,
                 )
-                content = (response.choices[0].message.content or "").strip()
+                choice = response.choices[0]
+                content = (choice.message.content or "").strip()
+
+                # Reasoning models (gpt-oss-*) spend max_tokens on a separate
+                # `reasoning` field before emitting `content`. If the budget runs
+                # out first, content comes back empty. Left unchecked that reads
+                # as a clean not-found, which would blame the corpus for a token
+                # budget problem -- so raise instead, and say which it was.
+                if not content:
+                    reasoning = (
+                        getattr(choice.message, "reasoning", "") or ""
+                    ).strip()
+                    if choice.finish_reason == "length" and reasoning:
+                        raise LLMError(
+                            f"{name} used its entire max_tokens on reasoning and "
+                            f"produced no answer text. Raise max_tokens "
+                            f"(currently {max_tokens}), or use a non-reasoning "
+                            f"model such as qwen/qwen3.8-27b."
+                        )
+                    raise LLMError(
+                        f"{name} returned an empty answer (finish_reason="
+                        f"{choice.finish_reason!r})."
+                    )
+
                 LOGGER.info(
                     "llm ok: model=%s attempt=%d chars=%d", name, attempt, len(content)
                 )

@@ -49,8 +49,8 @@ class Config:
 
     # LLM
     groq_api_key: str = field(default="", repr=False)
-    groq_model: str = "llama-3.3-70b-versatile"
-    groq_fallback_model: str = "llama-3.1-8b-instant"
+    groq_model: str = "qwen/qwen3.8-27b"
+    groq_fallback_model: str = "openai/gpt-oss-20b"
 
     # Paths
     data_dir: Path = Path("./data")
@@ -135,9 +135,9 @@ def get_config() -> Config:
     if _CONFIG is None:
         _CONFIG = Config(
             groq_api_key=os.getenv("GROQ_API_KEY", "") or "",
-            groq_model=_env_str("GROQ_MODEL", "llama-3.3-70b-versatile"),
+            groq_model=_env_str("GROQ_MODEL", "qwen/qwen3.8-27b"),
             groq_fallback_model=_env_str(
-                "GROQ_FALLBACK_MODEL", "llama-3.1-8b-instant"
+                "GROQ_FALLBACK_MODEL", "openai/gpt-oss-20b"
             ),
             data_dir=_env_str("DATA_DIR", "./data"),
             chroma_dir=_env_str("CHROMA_DIR", "./data/chroma"),
