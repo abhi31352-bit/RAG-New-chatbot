@@ -77,8 +77,17 @@ TEST_QUESTIONS: List[Tuple[str, Optional[str], str, str]] = [
 EXPECTED_MISS = {6}
 
 
-def find_fact(chunks: List[RetrievedChunk], pattern: str) -> Optional[str]:
-    """Return the captured fact value from the first chunk that has it."""
+def find_fact(
+    chunks: List[RetrievedChunk], pattern: Optional[str]
+) -> Optional[str]:
+    """Return the captured fact value from the first chunk that has it.
+
+    `pattern` is Optional because the ad-hoc `--question` path has no known-good
+    value to look for. Callers must handle None; passing it to re.search raises
+    TypeError.
+    """
+    if not pattern:
+        return None
     for chunk in chunks:
         match = re.search(pattern, chunk.text, re.IGNORECASE)
         if match:
@@ -160,6 +169,14 @@ def main(argv: Optional[List[str]] = None) -> int:
                   f"scheme={chunk.scheme_id}  section={str(chunk.section)[:32]!r}")
             print(f"       {preview(chunk.text)}")
 
+        # An ad-hoc question has no known-good value, so there is nothing to
+        # assert. Print the chunks and report, but do not crash and do not
+        # pretend to a pass/fail verdict the user has no basis for.
+        if pattern is None:
+            print("  fact value      : not checked (ad-hoc question, no known value)")
+            print("  VERDICT: n/a - inspect the chunks above")
+            continue
+
         value = find_fact(chunks, pattern)
         scheme_ok = all(c.scheme_id == expected for c in chunks) if expected else True
 
@@ -191,7 +208,12 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     print()
     print(RULE)
-    print(f"RESULT: {passed}/{len(questions)} questions passed")
+    if args.question:
+        # An ad-hoc run has no expected values, so there is no gate to report.
+        print("Ad-hoc run - inspection only, no pass/fail gate.")
+        print("For the graded gate, run without --question.")
+    else:
+        print(f"RESULT: {passed}/{len(questions)} questions passed")
     if failures:
         print("\nFAILURES:")
         for failure in failures:
