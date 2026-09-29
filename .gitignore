@@ -5,3 +5,6 @@ __pycache__/
 data/chroma/
 .streamlit/secrets.toml
 logs/
+# Regenerable verbose embedding dump (all 384 dims for all 177 chunks, ~1 MB).
+# The readable digest data/chunks/embeddings_preview.txt is tracked instead.
+data/chunks/embeddings_full.txt
