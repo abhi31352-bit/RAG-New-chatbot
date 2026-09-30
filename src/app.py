@@ -226,16 +226,26 @@ def main() -> None:
                     f"Last updated from sources: {entry['last_updated']}"
                 )
 
-    # Example buttons fill the input; they never auto-submit, so a demo
-    # operator can edit the question before sending.
+    # Example buttons SUBMIT their question directly: clicking one produces an
+    # answer in the transcript, with no second "press send" step. The previous
+    # version wrote st.session_state["question_input"] and called st.rerun(),
+    # but st.chat_input returns its own value and is bound to no session key,
+    # so the click set a key nobody read and the rerun discarded it. The three
+    # buttons on the landing page did nothing at all.
     st.markdown("**Try one:**")
     columns = st.columns(len(EXAMPLE_QUESTIONS))
+    clicked: Optional[str] = None
     for column, example in zip(columns, EXAMPLE_QUESTIONS):
         if column.button(example, key=f"example_{example[:20]}", use_container_width=True):
-            st.session_state["question_input"] = example
-            st.rerun()
+            clicked = example
 
-    question = st.chat_input("Ask a scheme fact, e.g. What is the benchmark of HDFC Flexi Cap?")
+    typed = st.chat_input(
+        "Ask a scheme fact, e.g. What is the benchmark of HDFC Flexi Cap?"
+    )
+
+    # The click is the newer intent, so it wins. chat_input clears itself after
+    # submitting, so both being set means the user really did both.
+    question = clicked or typed
 
     if not question:
         st.markdown("---")
