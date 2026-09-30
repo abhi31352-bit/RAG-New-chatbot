@@ -29,6 +29,7 @@ prompt, and cost/latency grow without making answers better.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import re
 from typing import List, Optional, Sequence, Tuple
 
 from .guardrails import Verdict, classify_question
@@ -40,6 +41,25 @@ DEFAULT_WINDOW = 10
 # contract, so this is generous; the cap is a defence in depth in case a
 # malformed answer ever reaches here.
 MAX_ANSWER_CHARS = 400
+
+# Citation boilerplate is stripped before a turn enters the prompt. Every answer
+# ends with "Source: <url>" and "Last updated from sources: <date>"; across a
+# full 10-turn window that was ~1,000 chars of repeated URLs and dates, none of
+# which is a fact the model can use (the block is labelled not-a-source, so it
+# must not cite them) but all of which is charged against the provider's
+# throughput quota. The scheme's own facts are what resolve a follow-up.
+_HISTORY_NOISE = re.compile(
+    r"(?:Source:\s*(?:https?://\S+|\S+)|Last updated from sources:[^\n]*)",
+    re.IGNORECASE,
+)
+
+# Hard cap on the rendered history block, applied after truncation. The window
+# bounds the number of turns; this bounds their bytes, because turns vary in
+# length and a full window of long answers could still reach ~5k chars.
+# Measured: a full 10-turn window rendered 2,818 chars on top of a 1,480-char
+# context, i.e. 4,299 total -- 2.9x the prompt of a fresh session, which is what
+# made answers slow again the longer a conversation ran.
+MAX_HISTORY_CHARS = 900
 
 
 @dataclass
@@ -147,15 +167,47 @@ class ConversationMemory:
             "facts may only come from the CONTEXT blocks above.",
             "",
         ]
-        for index, turn in enumerate(turns, 1):
+        body: List[str] = []
+        for turn in turns:
             question = self._sanitize(turn.question)
             if question is None:
                 continue
             answer = self._sanitize(turn.answer, max_chars=MAX_ANSWER_CHARS)
             if answer is None:
                 answer = "(no answer given)"
-            lines.append(f"{index}. Asked: {question}")
-            lines.append(f"   Answered: {answer}")
+            # Strip this turn's own citation decoration: "Source: <url>" and the
+            # last-updated line are contract requirements on a PAST answer, not
+            # facts, and repeating a URL per turn is what let the block reach
+            # ~2.8k chars.
+            truncated = answer is not None and len(answer) >= MAX_ANSWER_CHARS
+            answer = _HISTORY_NOISE.sub("", answer or "").strip()
+            answer = re.sub(r"\s{2,}", " ", answer).strip(" .")
+            if truncated and answer:
+                # Keep the marker: a silently shortened answer in the prompt is
+                # worse than one that admits it was cut.
+                answer += " ..."
+            if not answer:
+                continue
+            body.append(f"Asked: {question}\n   Answered: {answer}")
+
+        # Bound the block by BYTES as well as by turn count: the window bounds
+        # how many turns are kept, this bounds how much they cost. Keep the
+        # NEWEST turns, since a pronoun refers back to the recent past, and
+        # renumber afterwards so the visible order stays oldest-to-newest.
+        if body:
+            newest: List[str] = []
+            for entry in reversed(body):
+                if len("\n".join(newest + [entry])) > MAX_HISTORY_CHARS:
+                    break
+                newest.append(entry)
+            kept = list(reversed(newest))
+            if len(kept) < len(body):
+                # Not numbered: it is a note about the window, not a turn, and
+                # numbering it would offset every real turn below it.
+                lines.append(f"({len(body) - len(kept)} earlier turn(s) omitted)")
+            for index, entry in enumerate(kept, 1):
+                lines.append(f"{index}. {entry}")
+
         lines.append("")
         return "\n".join(lines)
 

@@ -26,6 +26,8 @@ Design constraints that are deliberate, not incidental:
 from __future__ import annotations
 
 import logging
+
+LOGGER = logging.getLogger("app")
 import os
 import sys
 from typing import List, Optional
@@ -110,6 +112,27 @@ def index_ready() -> bool:
     return (config.chroma_dir / "chroma.sqlite3").exists()
 
 
+def warm_up() -> None:
+    """Pay the one-time costs before the user's first question, not during it.
+
+    Two costs are real and both land on the first search of a fresh process:
+    loading all-MiniLM-L6-v2 into memory (measured 11.2s here, longer on a
+    Render free-tier CPU) and opening the Chroma collection. Neither depends on
+    the question, so a single throwaway search absorbs both while the page is
+    still rendering its welcome text. After this, a question is only the LLM
+    round trip.
+
+    Runs against a canned question with no side effects: retrieval only, no
+    LLM call, nothing logged, nothing cached into the answer path.
+    """
+    try:
+        get_retriever().search("warm up the index", k_context=1)
+        LOGGER.info("warm_up: retriever and embedder ready")
+    except Exception as error:  # noqa: BLE001 - never block the UI on warm-up
+        LOGGER.warning("warm_up failed (%s); the first question will retry",
+                       type(error).__name__)
+
+
 # --- Rendering ---------------------------------------------------------------
 
 
@@ -157,6 +180,11 @@ def main() -> None:
     st.title("HDFC Scheme Facts")
     st.caption("HDFC — 5 schemes, Direct Growth")
     st.markdown(DISCLAIMER)
+
+    # Absorb the one-time embedder/chroma load here, while the welcome text is
+    # still rendering, instead of on the user's first question. No spinner, so
+    # if it is still in flight when they type, the answer is simply faster.
+    warm_up()
 
     if not index_ready():
         st.error(
@@ -264,7 +292,7 @@ def main() -> None:
                 "Something went wrong handling that question. Try rephrasing it."
             )
             st.caption(f"({type(error).__name__})")
-            logging.getLogger("app").exception("query failed")
+            LOGGER.exception("query failed")
             answer = Answer(text="", kind="error", reason=type(error).__name__)
 
     # Every exchange is recorded, including refusals, so a follow-up to a

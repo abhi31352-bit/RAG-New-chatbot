@@ -171,3 +171,180 @@ def test_window_only_renders_the_window():
     assert "q0" not in rendered
     assert "q9" in rendered
     assert rendered.count("Asked:") == 3
+
+
+# --- Prompt size. The block must not grow without bound. ----------------------
+#
+# Regression: a full 10-turn window rendered 2,818 chars, of which ~1,000 were
+# repeated "Source:" URLs and "Last updated" lines. Added to a 1,480-char context
+# that is a 4,299-char prompt -- 2.9x a fresh session -- which is what made
+# answers get slow again the longer a conversation ran.
+
+ANSWER_WITH_CITATION = (
+    "The minimum SIP for HDFC Small Cap Fund Direct Growth is Rs 100 per "
+    "month. Source: https://groww.in/mutual-funds/hdfc-small-cap. "
+    "Last updated from sources: 2026-09-29."
+)
+
+
+def test_citation_boilerplate_is_stripped_from_history():
+    memory = ConversationMemory()
+    memory.add("What is the SIP?", ANSWER_WITH_CITATION)
+    rendered = memory.render()
+    assert "Rs 100" in rendered
+    assert "groww.in" not in rendered
+    assert "Last updated" not in rendered
+
+
+def test_history_is_bounded_by_bytes_not_just_turns():
+    from src.memory import MAX_HISTORY_CHARS
+
+    memory = ConversationMemory()
+    for _ in range(10):
+        memory.add("What is the SIP for HDFC Small Cap?", ANSWER_WITH_CITATION)
+    rendered = memory.render()
+    assert len(rendered) <= MAX_HISTORY_CHARS + 200
+
+
+def test_history_does_not_grow_past_the_cap():
+    """The user-visible symptom: later questions in a session got slower.
+
+    The cap applies to the turn bodies; the 161-char header is added on top, so
+    the rendered total settles a little above MAX_HISTORY_CHARS and then stays
+    flat. Measured: 300/433/566/699/832/965/993 and then 993 for the rest.
+    """
+    from src.memory import MAX_HISTORY_CHARS
+
+    memory = ConversationMemory()
+    sizes = []
+    for _ in range(10):
+        memory.add("What is the SIP for HDFC Small Cap?", ANSWER_WITH_CITATION)
+        sizes.append(len(memory.render()))
+    # Plateaus well before the last turn instead of climbing every turn.
+    assert sizes[-1] == sizes[6], sizes
+    assert sizes[-1] <= MAX_HISTORY_CHARS + 250
+
+
+def test_turns_stay_in_oldest_to_newest_order():
+    """Regression: an early version reversed the block while truncating."""
+    memory = ConversationMemory()
+    for index in range(6):
+        memory.add(f"question {index}", f"unique answer {index}")
+    rendered = memory.render()
+    positions = [rendered.index(f"unique answer {i}") for i in range(6)
+                 if f"unique answer {i}" in rendered]
+    assert positions == sorted(positions), "history rendered newest-first"
+
+
+def test_omission_note_is_not_numbered():
+    """It is a note about the window, not a turn; numbering it offsets the
+    real turns below it."""
+    memory = ConversationMemory()
+    for index in range(10):
+        memory.add(f"q{index}", ANSWER_WITH_CITATION)
+    rendered = memory.render()
+    assert "omitted" in rendered
+    assert "1. (" not in rendered
+
+
+def test_turns_after_an_omission_are_still_numbered_from_one():
+    memory = ConversationMemory()
+    for index in range(10):
+        memory.add(f"q{index}", ANSWER_WITH_CITATION)
+    rendered = memory.render()
+    assert ". Asked:" in rendered
+    assert rendered.count(". Asked:") >= 1
+
+
+def test_context_is_capped_regardless_of_retrieval():
+    """Backstop for the prompt size that drives Groq throttling.
+
+    Measured: ~1k context -> 2/12 calls over 2s. ~4.3k -> 12/12 over 2s, medians
+    0.46s vs 5.71s. A fund-manager query legitimately promotes several Fund
+    management chunks, so SCORE_FLOOR_RATIO alone cannot bound this.
+    """
+    from src.prompts import MAX_CONTEXT_CHARS, build_user_prompt
+
+    class C:
+        scheme_id, section, source_url = "S1", "Fund management", "https://groww.in/x"
+
+        def __init__(self):
+            self.text = "y" * 900
+
+    chunks = [C() for _ in range(10)]
+    prompt = build_user_prompt("Who manages it?", chunks)
+    context = prompt.split("CONTEXT")[1].split("---")[0]
+    assert len(context) <= MAX_CONTEXT_CHARS + 200
+
+
+def test_capped_context_says_what_it_dropped():
+    """A silently shortened context lets the model read an omission as 'not in
+    the corpus' and answer NOT_FOUND for something it was never shown."""
+    from src.prompts import build_user_prompt
+
+    class C:
+        scheme_id, section, source_url = "S1", "Fund management", "https://groww.in/x"
+
+        def __init__(self):
+            self.text = "y" * 900
+
+    prompt = build_user_prompt("Who manages it?", [C() for _ in range(10)])
+    assert "omitted for brevity" in prompt
+
+
+def test_capped_context_keeps_the_highest_ranked():
+    """Trimming must cut from the tail, never from the top of the ranking."""
+    from src.prompts import build_user_prompt
+
+    class C:
+        scheme_id, section, source_url = "S1", "s", "https://groww.in/x"
+
+        def __init__(self, tag):
+            self.text = f"MARKER-{tag} " + "y" * 880
+
+    prompt = build_user_prompt("q", [C("first"), C("second"), C("third")])
+    assert "MARKER-first" in prompt
+    assert prompt.index("MARKER-first") < prompt.index("MARKER-second")
+
+
+def test_short_context_is_not_truncated():
+    from src.prompts import build_user_prompt
+
+    class C:
+        scheme_id, section, source_url = "S1", "About", "https://groww.in/x"
+        text = "The expense ratio is 1.03%."
+
+    prompt = build_user_prompt("What is the expense ratio?", [C()])
+    assert "omitted" not in prompt
+    assert "1.03%" in prompt
+
+
+def test_warmup_does_not_need_an_api_key():
+    """Warm-up must stay retrieval-only: no LLM call, no cost, no key required."""
+    import inspect
+
+    from src import app as app_module
+
+    source = inspect.getsource(app_module.warm_up)
+    assert "answer(" not in source
+    assert "chat(" not in source
+    assert "LLMClient" not in source
+
+
+def test_app_logger_is_defined():
+    """Regression: warm_up() referenced LOGGER, which was never bound in
+    app.py, so it raised NameError on every page render. Caught by calling
+    warm_up() directly -- the test suite never executed app.py's body."""
+    from src import app as app_module
+
+    assert hasattr(app_module, "LOGGER")
+    assert app_module.LOGGER.name == "app"
+
+
+def test_warmup_runs_without_raising():
+    """Call it for real, not by inspection. Needs the built index."""
+    from src import app as app_module
+
+    if not app_module.index_ready():
+        pytest.skip("index not built")
+    app_module.warm_up()  # must not raise
