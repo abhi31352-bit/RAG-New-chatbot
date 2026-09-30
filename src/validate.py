@@ -32,6 +32,11 @@ KIND_ANSWER = "answer"
 KIND_NOT_FOUND = "not_found"
 KIND_REFUSAL = "refusal"
 KIND_INVALID = "invalid"
+# A provider failure (timeout, rate limit, 5xx). Deliberately NOT not_found:
+# the corpus was fine and the question may well be answerable, so reporting it
+# as "not found in the indexed pages" tells the user something false about the
+# data and sends them off to rephrase a question that was never the problem.
+KIND_ERROR = "error"
 
 MAX_SENTENCES = 3
 LAST_UPDATED_PREFIX = "Last updated from sources:"

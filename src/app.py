@@ -128,6 +128,13 @@ def render_answer(answer: Answer, show_sources: bool = False,
         st.info("Refused before the model was called (no data left your machine).")
     elif answer.kind == "not_found":
         st.warning("Not found in the indexed pages.")
+    elif answer.kind == "error":
+        # Distinct from not_found on purpose: the answer may be perfectly
+        # answerable, the model provider was just slow or throttled.
+        st.error(
+            "The model provider did not respond in time. This is not a problem "
+            "with your question or with the indexed data - try again."
+        )
 
     if show_sources and chunks:
         with st.expander(f"Sources used ({len(chunks)} chunks)"):

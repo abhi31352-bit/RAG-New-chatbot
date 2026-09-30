@@ -66,6 +66,7 @@ class Retriever:
         k_context: Optional[int] = None,
         max_per_section: int = 2,
         dedup_threshold: float = 0.97,
+        score_floor_ratio: Optional[float] = None,
     ) -> None:
         """
         Args:
@@ -75,12 +76,20 @@ class Retriever:
                 fees cannot return four rows of the same holdings table.
             dedup_threshold: cosine similarity above which two chunks are
                 treated as the same passage.
+            score_floor_ratio: keep only chunks scoring at least this multiple
+                of the top hit. See `_apply_relative_floor` for why this is
+                separate from `min_score`.
         """
         self.config = get_config()
         self.k_fetch = k_fetch or self.config.k_fetch
         self.k_context = k_context or self.config.k_context
         self.max_per_section = max_per_section
         self.dedup_threshold = dedup_threshold
+        self.score_floor_ratio = (
+            self.config.score_floor_ratio
+            if score_floor_ratio is None
+            else score_floor_ratio
+        )
         self._collection = None
         self._embedder = None
         # Per-instance, not a class attribute: a class-level dict would be
@@ -194,12 +203,51 @@ class Retriever:
             )
             return []
 
+        raw = self._apply_relative_floor(raw)
         selected = self._diversify(raw, context)
         LOGGER.info(
             "search: %d candidates -> %d selected (top score %.4f)",
             len(raw), len(selected), selected[0].score if selected else 0.0,
         )
         return selected
+
+    def _apply_relative_floor(
+        self, candidates: Sequence[RetrievedChunk]
+    ) -> List[RetrievedChunk]:
+        """Drop chunks far weaker than the top hit, before filling k_context.
+
+        `min_score` is an ABSOLUTE floor and gates only the top hit, which is
+        right for "is anything here about this at all?". It is the wrong tool for
+        the tail: on a scheme-filtered query the top hit lands around 0.5-0.65,
+        and the slots below it were being filled with Holdings and Fund
+        management chunks scoring 0.21-0.46. Those clear the 0.25 absolute floor
+        yet answer nothing, and they cost real latency -- prompt size is charged
+        against the provider's throughput quota, so a 2x larger prompt roughly
+        doubles queue time once you are throttled.
+
+        A RELATIVE floor measures each chunk against the best match for THIS
+        query instead of against a constant. Measured at 0.75x: prompt chars
+        fall from 4898/4158/6340/7270 to 1023/1029/1017/1219 across the four
+        gate questions, and the fund-manager question -- where the extra chunks
+        are genuinely on-topic -- correctly keeps 3124 chars rather than being
+        cut to a single chunk. Answer quality was verified identical: all 15
+        authoritative fact checks (expense ratio, exit load, minimum SIP across
+        all 5 schemes) pass at every setting.
+
+        0 disables this, restoring plain top-k behaviour.
+        """
+        ratio = self.score_floor_ratio
+        if not ratio or ratio <= 0 or not candidates:
+            return list(candidates)
+        top = candidates[0].score
+        cutoff = top * ratio
+        kept = [c for c in candidates if c.score >= cutoff]
+        if len(kept) < len(candidates):
+            LOGGER.info(
+                "search: relative floor %.2fx top (%.4f) dropped %d weak chunk(s)",
+                ratio, cutoff, len(candidates) - len(kept),
+            )
+        return kept
 
     # -- internals -------------------------------------------------------
 

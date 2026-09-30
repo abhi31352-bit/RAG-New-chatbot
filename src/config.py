@@ -75,6 +75,17 @@ class Config:
     # cleanly. Turning "nothing here is about that" into an empty result set is
     # what lets the answer contract say "not found" instead of inventing one.
     min_score: float = 0.25
+    # Relative floor: keep only chunks scoring >= ratio x the top hit. `min_score`
+    # above is ABSOLUTE and gates only the top hit, answering "is anything in the
+    # corpus about this at all?". This one trims the tail, answering "is this
+    # chunk actually about the thing we matched?". Without it, k_context=10 fills
+    # its extra slots with Holdings/Fund-management chunks at 0.21-0.46 that
+    # clear the absolute floor but answer nothing -- and cost latency, since
+    # prompt size is charged against the LLM provider's throughput quota.
+    # Measured at 0.75: prompt chars 4898/4158/6340/7270 -> 1023/1029/1017/1219
+    # on the four gate questions, with no change to any answer. Set 0 to
+    # disable and fall back to plain top-k.
+    score_floor_ratio: float = 0.75
 
     # Sub-directories derived from data_dir
     raw_dir: Path = field(init=False)
@@ -152,6 +163,7 @@ def get_config() -> Config:
             k_fetch=_env_int("K_FETCH", 10),
             k_context=_env_int("K_CONTEXT", 10),
             min_score=_env_float("MIN_SCORE", 0.25),
+            score_floor_ratio=_env_float("SCORE_FLOOR_RATIO", 0.75),
         )
         _CONFIG.ensure_dirs()
     return _CONFIG

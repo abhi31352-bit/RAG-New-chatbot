@@ -21,9 +21,19 @@ LOGGER = logging.getLogger("llm")
 # Retries only on rate limits and server errors. A 400 (bad request) or 401
 # (bad key) will not fix itself, so retrying just delays the real error.
 RETRY_STATUS = frozenset({408, 429, 500, 502, 503, 504})
-MAX_ATTEMPTS = 3          # 1 initial + 2 retries
-BACKOFF_SECONDS = (1.0, 3.0)
-TIMEOUT_SECONDS = 25.0
+# ONE attempt, no retry. The original 3 x 25s + backoff was a 79s worst-case
+# wait. Groq throttles on throughput, and a retried call re-queues behind the
+# very traffic that caused the throttle -- measured: a retry lands in the same
+# slow window, so it buys no reliability and doubles the wait for the user. The
+# latency fix belongs in the prompt (SCORE_FLOOR_RATIO, 19.4s -> 0.8s median),
+# not in hammering the provider. Raise this to 2 only alongside a real
+# backoff schedule.
+MAX_ATTEMPTS = 1
+BACKOFF_SECONDS = ()
+# Must clear the observed p99 (22.2s at k_context=10, 13.1s after the floor cut
+# the prompt) with real headroom. Checked as a PRODUCT with MAX_ATTEMPTS --
+# raising this alone is what turned a 79s budget into 91s.
+TIMEOUT_SECONDS = 30.0
 # A reasoning model (gpt-oss-120b) can spend most of this on its hidden
 # `reasoning` field before writing any answer text. 300 is not enough for one,
 # and the failure looks like an empty answer rather than an error.

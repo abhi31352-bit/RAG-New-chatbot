@@ -21,6 +21,7 @@ from .retrieve import RetrievedChunk, Retriever
 from .validate import (
     KIND_ANSWER,
     KIND_INVALID,
+    KIND_ERROR,
     KIND_NOT_FOUND,
     ValidationResult,
     validate,
@@ -173,7 +174,7 @@ class AnswerEngine:
             # the user; log them, answer with the safe message.
             LOGGER.error("LLM call failed: %s", error)
             return Answer(
-                text=LLM_ERROR_MESSAGE, kind=KIND_NOT_FOUND,
+                text=LLM_ERROR_MESSAGE, kind=KIND_ERROR,
                 source_url=self._top_url(resolved),
                 last_updated=self._newest(resolved),
                 chunks_used=[c.chunk_id for c in resolved],
