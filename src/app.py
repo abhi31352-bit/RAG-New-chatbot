@@ -192,10 +192,19 @@ def _scheme_label(chunks: Optional[List[RetrievedChunk]]) -> str:
 
 
 def render_footer() -> None:
-    """Full disclaimer, once, quietly, below the conversation.
+    """Full disclaimer, once, at the foot of the LANDING page.
 
     Kept out of the sidebar so the sidebar stays navigation. Kept on the page so
     it cannot be cropped away with the sidebar.
+
+    Deliberately called only from the idle branch, never after an answer. It used
+    to be drawn at the end of every turn, which put 123px of legal text (plus its
+    margins) between the newest answer and the question box: 163px of apparent
+    dead space, 202px on a phone. That reads as the answer being cut off by the
+    input bar, and it is what made the conversation look like it needed scrolling
+    to finish. The disclaimer is still on screen throughout a conversation --
+    the header carries the facts-only pill and the sidebar carries the short
+    strip -- so nothing became unreachable when this stopped repeating.
     """
     ui.render_footer_note(PERSISTENT_NOTE)
     ui.render_trusted_markdown(DISCLAIMER)
@@ -268,12 +277,21 @@ def main() -> None:
     # but st.chat_input returns its own value and is bound to no session key,
     # so the click set a key nobody read and the rerun discarded it. The three
     # buttons on the landing page did nothing at all.
-    ui.render_suggestion_label(first_visit=first_visit)
-    columns = st.columns(len(EXAMPLE_QUESTIONS))
+    #
+    # Landing page only, for the same reason the hero is: they used to be drawn
+    # after every turn as well, which put a 214px block of suggestion cards
+    # between the newest answer and the question box. That is the dead zone the
+    # chat is supposed to not have -- the answer has to be the last thing above
+    # the input. Once there is a conversation to read, the input is the only
+    # thing that belongs down there.
     clicked: Optional[str] = None
-    for column, example in zip(columns, EXAMPLE_QUESTIONS):
-        if column.button(example, key=f"example_{example[:20]}", use_container_width=True):
-            clicked = example
+    if first_visit:
+        ui.render_suggestion_label(first_visit=first_visit)
+        columns = st.columns(len(EXAMPLE_QUESTIONS))
+        for column, example in zip(columns, EXAMPLE_QUESTIONS):
+            if column.button(example, key=f"example_{example[:20]}",
+                             use_container_width=True):
+                clicked = example
 
     typed = st.chat_input(
         "Ask a scheme fact, e.g. What is the benchmark of HDFC Flexi Cap?"
@@ -366,7 +384,15 @@ def main() -> None:
     if len(st.session_state.transcript) > 2 * MEMORY_WINDOW:
         st.session_state.transcript = st.session_state.transcript[-2 * MEMORY_WINDOW:]
 
-    render_footer()
+    # No render_footer() here on purpose: see its docstring. The newest answer
+    # ends the content flow, so the sticky input bar is the very next thing the
+    # eye meets. The disclaimer is in the header and the sidebar instead.
+    #
+    # scroll_to_latest() runs last, after the transcript has been written, so it
+    # lands on the newest answer rather than on whatever was on screen when the
+    # script started. Streamlit 1.38 does not do this on its own -- see
+    # ui.scroll_to_latest for the three measurements that established it.
+    ui.scroll_to_latest()
     _render_sidebar(memory)
 
 

@@ -9,6 +9,8 @@ Run:  python -m pytest tests/test_ui_presentation.py -v
 """
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from src import ui
@@ -167,9 +169,243 @@ def _css() -> str:
     return inspect.getsource(ui)
 
 
+def _live_css() -> str:
+    """ui.py's source with every comment removed.
+
+    These files carry a lot of prose about defects that have already been fixed,
+    and the prose names the exact declarations it warns against ("an earlier
+    version used position: fixed"). Asserting against raw source therefore fails
+    on the documentation of a bug rather than on the bug, which is both noisy and
+    misleading. Stripping comments first makes each assertion mean what it says:
+    this is live CSS, not a memory of it.
+    """
+    import inspect
+    import re
+
+    src = inspect.getsource(ui)
+    src = re.sub(r"/\*.*?\*/", "", src, flags=re.DOTALL)
+    src = re.sub(r"^\s*#(?![0-9a-fA-F]).*$", "", src, flags=re.MULTILINE)
+    # The stylesheets are f-strings, so their braces are doubled in source and
+    # only become single ones when .format() runs. Undo that here: a rule-body
+    # scan written for `{ ... }` silently matches nothing against `{{ ... }}`,
+    # which is a test that passes no matter what the CSS says. Verified by
+    # re-adding `padding-left: 0` to stBottomBlockContainer and watching this
+    # file go green.
+    src = src.replace("{{", "{").replace("}}", "}")
+    return src
+
+
 def test_css_caps_the_content_width():
     """A 27" monitor should not leave the answer in a thin ribbon of white."""
     assert "max-width: 980px" in _css()
+
+
+def test_css_does_not_reposition_the_chat_input_to_the_viewport():
+    """Regression: the input must stay in Streamlit's own sticky column.
+
+    An earlier version pinned [data-testid="stChatInput"] with
+    `position: fixed; left: 0; right: 0`. A fixed box is positioned against the
+    viewport, not the content column, so the centred inner container was centred
+    on the window: with the 336px sidebar open the input sat 398px left of the
+    answers. Streamlit already pins this element via [data-testid="stBottom"]
+    (position: sticky, inside the main column), so any viewport-relative
+    positioning here is a regression, not an improvement.
+
+    Measured misalignment was ~398px at 1440x900 with the sidebar open.
+    """
+    assert "position: fixed" not in _live_css(), (
+        "the chat input must not be fixed to the viewport; Streamlit's stBottom "
+        "already keeps it aligned with the content column"
+    )
+    assert "position: absolute" not in _live_css(), (
+        "the same holds for absolute: both take the input out of the content "
+        "column that Streamlit lays out"
+    )
+
+
+def test_css_shares_one_gutter_between_the_two_columns():
+    """The main column and the input must inset by the same amount.
+
+    They are two separate boxes that have to land on the same two vertical
+    lines. Giving each its own padding is how they drift apart, so both read the
+    same custom property rather than repeating a number.
+    """
+    css = _live_css()
+    assert "--gutter:" in css, "the shared inset must be declared once"
+    consumers = css.count("padding-left: var(--gutter)")
+    assert consumers >= 2, (
+        "both .block-container and stBottomBlockContainer must pad from "
+        f"--gutter; found {consumers} consumer(s)"
+    )
+
+
+def test_both_columns_are_given_the_same_box():
+    """The main column and the input's column must be laid out identically.
+
+    Streamlit renders them as two separate boxes -- `.block-container` for the
+    content and `stBottomBlockContainer` for the chat input -- and the question
+    looks like it was typed somewhere else unless both resolve to the same width,
+    the same centring and the same horizontal inset. The fix was to stop fighting
+    Streamlit's box model and replicate it on the input's side instead, so the two
+    rules are now required to agree.
+
+    Drift here is silent and width-dependent: an earlier version stripped the
+    input column's wrapper inset, which aligned the question with a line no text
+    ever uses and measured as a flat -18px/+18px at every width from 320 to 1920.
+    It is also fragile in a second way, because the ~19.4px in question comes from
+    Streamlit's own stylesheet and moves with a version bump -- which is why no
+    hardcoded offset appears here.
+    """
+    css = _live_css()
+    geometry = ("max-width", "margin-left", "margin-right",
+                "padding-left", "padding-right")
+    # Shorthands are expanded before comparing. The two columns spell centring
+    # differently on purpose -- `margin: 0 auto` against a pair of longhands --
+    # because they were written at different times, and both resolve to the same
+    # auto margins. Comparing raw text would fail on that and would also break
+    # the next time anyone rewrites one side as a shorthand, without any layout
+    # having moved.
+    box_shorthand = {
+        "margin": ("margin-top", "margin-right", "margin-bottom", "margin-left"),
+        "padding": ("padding-top", "padding-right", "padding-bottom", "padding-left"),
+    }
+
+    def expand(values: dict) -> dict:
+        out = {}
+        for prop, value in values.items():
+            if prop not in box_shorthand:
+                out[prop] = value
+                continue
+            parts = value.split()
+            if len(parts) == 1:
+                sides = [parts[0]] * 4
+            elif len(parts) == 2:
+                sides = [parts[0], parts[1], parts[0], parts[1]]
+            elif len(parts) == 3:
+                sides = [parts[0], parts[1], parts[2], parts[1]]
+            else:
+                sides = parts[:4]
+            for side, val in zip(box_shorthand[prop], sides):
+                out[side] = val
+        return out
+
+    def selector_name(selector: str):
+        """The element a selector addresses, or None if it is not a lone box.
+
+        `[data-testid="stBottomBlockContainer"]` IS the element, so the testid is
+        read out rather than stripped away -- removing the attribute leaves only
+        whitespace and the rule silently matches nothing, which is how this test
+        passed while asserting nothing.
+
+        A selector with a descendant combinator is a different box and returns
+        None: `[data-testid="stSidebar"] .block-container` ends with the same
+        token but insets the sidebar, and matching it would assert against the
+        wrong element.
+        """
+        sel = selector.strip()
+        testid = re.fullmatch(r"\[data-testid=[\"']([^\"']+)[\"']\]", sel)
+        if testid:
+            return testid.group(1)
+        return sel if len(sel.split()) == 1 and sel else None
+
+    def declarations_for(needle: str) -> dict:
+        """Geometry declared by the rule whose whole selector is `needle`."""
+        for selector, body in re.findall(r"([^{}]+)\{([^}]*)\}", css):
+            if selector_name(selector) != needle:
+                continue
+            found = {}
+            for decl in body.split(";"):
+                if ":" in decl:
+                    prop, _, value = decl.partition(":")
+                    found[prop.strip()] = value.strip().replace("!important", "").strip()
+            return expand(found)
+        raise AssertionError(f"no rule targets {needle}; the column is unstyled")
+
+    main = declarations_for(".block-container")
+    bottom = declarations_for("stBottomBlockContainer")
+
+    for prop in geometry:
+        assert prop in main, f"the content column does not declare {prop}"
+        assert prop in bottom, (
+            f"the input column does not declare {prop}; the question box will not "
+            "line up with the answers above it"
+        )
+        assert main[prop] == bottom[prop], (
+            f"{prop} differs between the content column and the input column: "
+            f"{main[prop]!r} against {bottom[prop]!r}"
+        )
+    assert "980px" in main["max-width"], (
+        "both columns are capped at the same readable width; a 27\" monitor "
+        "should not leave the answer in a thin ribbon of white"
+    )
+
+
+def test_small_screen_rule_does_not_reintroduce_a_dead_zone():
+    """The narrow-viewport rule must not zero the space under the input.
+
+    An override here cancelled the reserved clearance at exactly the widths where
+    an answer overlapping the input is most likely, which is how the overlap came
+    back after being fixed. The gutter already steps down via --gutter, so this
+    rule has no reason to touch padding at all.
+    """
+    css = _live_css()
+    for match in re.finditer(r"@media[^{]*max-width:\s*768px[^{]*\{", css):
+        start = match.end()
+        depth, i = 1, start
+        while i < len(css) and depth:
+            if css[i] == "{":
+                depth += 1
+            elif css[i] == "}":
+                depth -= 1
+            i += 1
+        body = css[start : i - 1]
+        assert "padding-bottom" not in body, (
+            "the <=768px rule must not override padding-bottom; that padding is "
+            "the clearance between the newest answer and the question bar"
+        )
+
+
+def test_scroll_helper_reattaches_its_viewport_hooks_every_run():
+    """The scroll script must re-register, not register once.
+
+    A rerun replaces the component iframe that did the registering, and a
+    listener the parent window holds for a discarded child dies with it. Guarding
+    registration behind a "already done" flag on the parent leaves the flag alive
+    and the hook dead, so every turn after the first silently stops tracking the
+    viewport -- measured as the answer sitting 425px under the input at 390px
+    wide. Both the window listener and the container listener therefore have to
+    be removed and re-added on each execution.
+    """
+    script = ui._SCROLL_LATEST
+    assert "removeEventListener('resize'" in script, (
+        "the resize listener must be replaced on every run, not registered once"
+    )
+    assert "win.__hdfcOnResize" in script, (
+        "the previous resize handler has to be kept on the parent window so it "
+        "can be removed"
+    )
+    assert "disconnect()" in script, (
+        "the previous ResizeObserver must be disconnected so observers do not "
+        "accumulate across turns"
+    )
+    assert "b.__hdfcMark" in script, (
+        "the container's intent listeners need the same remove-then-re-add "
+        "treatment as the viewport hooks"
+    )
+    assert "__hdfcListening" not in script, (
+        "a one-shot registration flag is the defect this test exists to catch"
+    )
+
+
+def test_scroll_helper_never_blocks_the_app():
+    """A scroll hint is a convenience; it must not be able to break a turn."""
+    import inspect
+
+    src = inspect.getsource(ui.scroll_to_latest)
+    assert "except Exception" in src, (
+        "scroll_to_latest must swallow every failure: AppTest and any headless "
+        "render have no iframe to reach, and a demo must not die over it"
+    )
 
 
 def test_css_forbids_horizontal_scrolling():
