@@ -8,10 +8,16 @@ introduced by the UI layer.
 
 Design constraints that are deliberate, not incidental:
 
-  * The disclaimer appears TWICE -- header and sidebar. implementation.md is
-    explicit that a projector crop must not be able to hide it.
-  * Citations render as a clickable link AND the plain URL text, so the URL is
-    still visible if markdown link rendering fails.
+  * The disclaimer is reachable in three places -- the header pill, the sidebar
+    strip, and the full text in the page footer. implementation.md is explicit
+    that a projector crop must not be able to hide it. The sidebar version is
+    deliberately SHORT: repeating the full 60-word paragraph there made the
+    sidebar the most visually dominant column on the page, which is the opposite
+    of the point.
+  * Citations render once, as a compact "View source" row. The full URL is
+    still in the element, in both `href` and `title`, so it is available on
+    hover and to a screen reader -- it is simply no longer printed inline, which
+    was the direct cause of horizontal overflow.
   * Retrieval is cached by question text so re-clicking an example is instant
     mid-demo. The LLM call is deliberately NOT cached: a cached answer looks
     live but is stale, and demoing a frozen answer is worse than a slow one.
@@ -22,6 +28,10 @@ Design constraints that are deliberate, not incidental:
     only through src/memory.py, which re-classifies every turn before rendering
     it and labels the block as not-a-source. See that module for why the
     original "never feed history back" rule was narrowed rather than kept.
+
+The query path below -- classify, resolve, retrieve, answer, record -- is byte
+for byte the pipeline it was before the visual redesign. Every drawing call went
+to src/ui.py; no retrieval, guardrail, memory or LLM line moved.
 """
 from __future__ import annotations
 
@@ -38,6 +48,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import streamlit as st
 
+from src import ui
 from src.answer import Answer, AnswerEngine
 from src.config import get_config
 from src.guardrails import Verdict, classify_question
@@ -66,10 +77,15 @@ WELCOME = (
     "links its source. Facts-only. No investment advice."
 )
 
+# Four cards, not three: benchmark is a question people actually ask and it is
+# answerable from the corpus (verified: NIFTY 500 Total Return Index for
+# Flexi Cap). A suggestion card that renders not-found in front of a class is
+# worse than one fewer card.
 EXAMPLE_QUESTIONS = [
     "What is the expense ratio of HDFC Large Cap?",
     "What is the exit load on HDFC Small Cap?",
     "What is the lock-in period for HDFC ELSS?",
+    "What is the benchmark of HDFC Flexi Cap?",
 ]
 
 PERSISTENT_NOTE = "Facts-only. No investment advice."
@@ -138,35 +154,51 @@ def warm_up() -> None:
 
 def render_answer(answer: Answer, show_sources: bool = False,
                   chunks: Optional[List[RetrievedChunk]] = None) -> None:
-    if answer.source_url:
-        # Link text AND the bare URL, so the URL survives a failed markdown link.
-        st.markdown(
-            f"\n\n[`Source: {answer.source_url}`]({answer.source_url})",
-            unsafe_allow_html=False,
-        )
-    if answer.last_updated:
-        st.caption(f"Last updated from sources: {answer.last_updated}")
+    """Draw the citation, the last-updated line, any status, and the debug view.
+
+    Kept as its own function because it is called from two places -- the live
+    turn and the transcript replay -- and both must produce identical output or
+    a redrawn conversation would change shape when the page reloads.
+    """
+    # Prefer the Answer's own fields; fall back to what was parsed off the text
+    # so a citation is never dropped just because it lived in the prose.
+    _prose, text_url, text_date = ui.split_citation(answer.text)
+    ui.render_source_row(
+        answer.source_url or text_url,
+        answer.last_updated or text_date,
+        scheme_label=_scheme_label(chunks),
+    )
 
     if answer.kind == "refused":
-        st.info("Refused before the model was called (no data left your machine).")
+        ui.render_status("refused", "")
     elif answer.kind == "not_found":
-        st.warning("Not found in the indexed pages.")
+        ui.render_status("not_found", "")
     elif answer.kind == "error":
         # Distinct from not_found on purpose: the answer may be perfectly
         # answerable, the model provider was just slow or throttled.
-        st.error(
-            "The model provider did not respond in time. This is not a problem "
-            "with your question or with the indexed data - try again."
-        )
+        ui.render_status("error", "")
 
     if show_sources and chunks:
-        with st.expander(f"Sources used ({len(chunks)} chunks)"):
-            for rank, chunk in enumerate(chunks, 1):
-                st.markdown(
-                    f"**{rank}.** `{chunk.chunk_id}` — score {chunk.score:.3f} — "
-                    f"{chunk.scheme_id} · {chunk.section}"
-                )
-                st.caption(chunk.text[:400] + ("..." if len(chunk.text) > 400 else ""))
+        ui.render_chunks(chunks)
+
+
+def _scheme_label(chunks: Optional[List[RetrievedChunk]]) -> str:
+    """Short human name for the source row, taken from the retrieved chunks."""
+    for chunk in chunks or ():
+        name = getattr(chunk, "scheme_name", "") or ""
+        if name:
+            return name
+    return ""
+
+
+def render_footer() -> None:
+    """Full disclaimer, once, quietly, below the conversation.
+
+    Kept out of the sidebar so the sidebar stays navigation. Kept on the page so
+    it cannot be cropped away with the sidebar.
+    """
+    ui.render_footer_note(PERSISTENT_NOTE)
+    ui.render_trusted_markdown(DISCLAIMER)
 
 
 def main() -> None:
@@ -177,18 +209,23 @@ def main() -> None:
         initial_sidebar_state="expanded",
     )
 
-    st.title("HDFC Scheme Facts")
-    st.caption("HDFC — 5 schemes, Direct Growth")
-    st.markdown(DISCLAIMER)
+    # Styles first, so everything drawn below them is already themed.
+    ui.inject_css()
+    ui.inject_header_css()
+    ui.inject_page_css()
+    ui.inject_status_css()
 
-    # Absorb the one-time embedder/chroma load here, while the welcome text is
-    # still rendering, instead of on the user's first question. No spinner, so
-    # if it is still in flight when they type, the answer is simply faster.
+    ui.render_header()
+
+    # Absorb the one-time embedder/chroma load here, while the header and welcome
+    # text are still rendering, instead of on the user's first question. No
+    # spinner, so if it is still in flight when they type, the answer is simply
+    # faster.
     warm_up()
 
     if not index_ready():
         st.error(
-            "**Index not built — run `python -m scripts.ingest`**\n\n"
+            "**Index not built — run `python -m src.ingest`**\n\n"
             "This app never builds the index itself: ingestion is a separate, "
             "one-time step so a restart cannot silently re-scrape or re-embed."
         )
@@ -202,9 +239,6 @@ def main() -> None:
         )
         st.stop()
 
-    st.markdown("---")
-    st.markdown(WELCOME)
-
     if "transcript" not in st.session_state:
         st.session_state.transcript = []
     if "memory" not in st.session_state:
@@ -213,18 +247,20 @@ def main() -> None:
         st.session_state.show_sources = False
 
     memory: ConversationMemory = st.session_state.memory
+    first_visit = not st.session_state.transcript
+
+    if first_visit:
+        ui.render_page_heading(intro=WELCOME)
 
     for entry in st.session_state.transcript:
         with st.chat_message(entry["role"]):
-            st.markdown(entry["text"])
-            if entry.get("source_url"):
-                st.markdown(
-                    f"\n\n[`Source: {entry['source_url']}`]({entry['source_url']})"
-                )
-            if entry.get("last_updated"):
-                st.caption(
-                    f"Last updated from sources: {entry['last_updated']}"
-                )
+            if entry["role"] == "user":
+                ui.render_user_bubble(entry["text"])
+            else:
+                ui.render_answer_card(entry["text"])
+                _prose, text_url, text_date = ui.split_citation(entry["text"])
+                ui.render_source_row(entry.get("source_url") or text_url,
+                                     entry.get("last_updated") or text_date)
 
     # Example buttons SUBMIT their question directly: clicking one produces an
     # answer in the transcript, with no second "press send" step. The previous
@@ -232,7 +268,7 @@ def main() -> None:
     # but st.chat_input returns its own value and is bound to no session key,
     # so the click set a key nobody read and the rerun discarded it. The three
     # buttons on the landing page did nothing at all.
-    st.markdown("**Try one:**")
+    ui.render_suggestion_label(first_visit=first_visit)
     columns = st.columns(len(EXAMPLE_QUESTIONS))
     clicked: Optional[str] = None
     for column, example in zip(columns, EXAMPLE_QUESTIONS):
@@ -248,24 +284,27 @@ def main() -> None:
     question = clicked or typed
 
     if not question:
-        st.markdown("---")
-        st.caption(PERSISTENT_NOTE)
+        render_footer()
+        _render_sidebar(memory)
         return
 
     question = question.strip()
     with st.chat_message("user"):
-        st.markdown(question)
+        ui.render_user_bubble(question)
 
     # A pronoun with no referent cannot retrieve anything. Fold in the scheme the
     # conversation is already about. The user still sees their own wording: this
     # only changes what we search for.
     resolved_question, was_resolved = memory.resolve(question)
     if was_resolved:
-        st.caption(
-            f"Resolving the reference as: *{resolved_question}*"
-        )
+        ui.render_resolution_note(resolved_question)
 
     with st.chat_message("assistant"):
+        # Painted before the blocking round trip so the wait has words in it
+        # instead of an unexplained freeze, then cleared before the answer lands.
+        waiting = st.empty()
+        with waiting.container():
+            ui.render_loading()
         try:
             # Guardrails first, exactly as the terminal path does. This is a
             # display convenience, not the enforcement point: AnswerEngine
@@ -295,9 +334,11 @@ def main() -> None:
                         chunks=chunks,
                         history=memory.render(),
                     )
-            st.markdown(answer.text)
+            waiting.empty()
+            ui.render_answer_card(answer.text)
             render_answer(answer, st.session_state.show_sources, chunks)
         except Exception as error:  # noqa: BLE001 - a demo must not show a traceback
+            waiting.empty()
             st.error(
                 "Something went wrong handling that question. Try rephrasing it."
             )
@@ -325,41 +366,25 @@ def main() -> None:
     if len(st.session_state.transcript) > 2 * MEMORY_WINDOW:
         st.session_state.transcript = st.session_state.transcript[-2 * MEMORY_WINDOW:]
 
-    st.markdown("---")
-    st.caption(PERSISTENT_NOTE)
+    render_footer()
+    _render_sidebar(memory)
 
+
+def _render_sidebar(memory: ConversationMemory) -> None:
+    """Compact navigation column. Reads state, never writes pipeline state."""
     with st.sidebar:
-        st.markdown(DISCLAIMER)
-        st.markdown("---")
-        st.subheader("Display")
-        st.session_state.show_sources = st.checkbox(
-            "Show retrieved chunks",
-            value=st.session_state.show_sources,
-            help="Makes the RAG visible: which chunks the answer was built from.",
+        show_sources, clear_requested = ui.render_sidebar(
+            show_sources=st.session_state.show_sources,
+            memory_len=len(memory),
+            memory_window=MEMORY_WINDOW,
+            chunks_label=f"{K_CONTEXT} chunks per question",
         )
-        st.markdown("---")
-        st.subheader("Context")
-        st.markdown(f"**{K_CONTEXT}** chunks per question")
-        st.caption(
-            f"Conversation memory: last **{len(memory)}** of "
-            f"{MEMORY_WINDOW} turns, used to resolve references like "
-            f"\"what about its exit load?\". Every turn is re-checked by the "
-            f"guardrails before it reaches the model, and history is never "
-            f"treated as a source of facts."
-        )
-        if memory:
-            if st.button("Clear conversation memory"):
-                memory.clear()
-                st.rerun()
-        st.markdown("---")
-        st.subheader("Indexed schemes")
-        for scheme in ("Large Cap", "Flexi Cap", "ELSS Tax Saver",
-                       "Small Cap", "Balanced Advantage"):
-            st.markdown(f"- {scheme} (Direct – Growth)")
-        st.caption(
-            "Facts come from 5 public scheme pages. The assistant does not "
-            "recommend, rate, or compare investments, and does not predict returns."
-        )
+        st.session_state.show_sources = show_sources
+        if clear_requested:
+            # Memory only. The transcript is display, and leaving it in place is
+            # how the operator can re-read a turn they have already seen.
+            memory.clear()
+            st.rerun()
 
 
 if __name__ == "__main__":

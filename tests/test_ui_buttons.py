@@ -134,14 +134,41 @@ def test_no_dead_session_state_key_for_the_chat_input():
 
 
 def test_buttons_do_not_depend_on_a_second_send_step():
-    """A click must answer on its own, not prefill for the operator to send."""
+    """A click must answer on its own, not prefill for the operator to send.
+
+    Anchored on the two statements that matter rather than on any particular
+    label or widget call. The previous version split main()'s source on
+    `st.markdown("**Try one:**")`, which the UI redesign removed when the label
+    became a styled element -- the test then raised IndexError, reporting a
+    broken button loop that was in fact fine. Anchoring on the loop head and the
+    chat_input read keeps the invariant and survives any presentational edit to
+    the cards above them.
+    """
     import inspect
 
     from src import app as app_module
 
     source = inspect.getsource(app_module.main)
-    button_block = source.split("st.markdown(\"**Try one:**\")")[1].split("typed = ")[0]
+    code = "\n".join(
+        line for line in source.splitlines()
+        if not line.lstrip().startswith("#")
+    )
+
+    loop_start = code.index("for column, example in zip(")
+    input_read = code.index("typed = st.chat_input(")
+    assert loop_start < input_read, (
+        "the example loop must come before the chat input read, so a click in "
+        "the same run can supply the question"
+    )
+
+    button_block = code[loop_start:input_read]
     assert "st.rerun()" not in button_block, (
         "a rerun after the click discards it; the question must flow through "
         "the same script run"
+    )
+    assert "clicked" in button_block, (
+        "the click must assign to `clicked`, which main() reads as the question"
+    )
+    assert "question = clicked or typed" in code, (
+        "the click result has to reach the question, or the button does nothing"
     )

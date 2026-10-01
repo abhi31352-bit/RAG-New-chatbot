@@ -1,0 +1,33 @@
+# Streamlit theme. Presentation only -- no pipeline code reads this file.
+#
+# This is the token layer for the Groww-inspired fintech look: green primary on
+# a near-white background, dark charcoal text, very light borders. Everything
+# else (layout, cards, chat bubbles) is CSS in src/ui.py, because Streamlit's
+# own theme options cover colour and type but not spacing or component shape.
+#
+# Key names verified against streamlit 1.38.0. `client.toolbar_mode` and
+# `client.showSidebarNav` are NOT valid in this version -- they raise
+# RuntimeError -- so the camelCase spellings below are deliberate.
+
+[theme]
+# "light" is what makes the whole thing read as a fintech product rather than
+# a developer tool. The previous default followed the OS, which put a dark
+# sidebar next to a white page on many machines.
+base = "light"
+
+primaryColor = "#0F9D58"
+backgroundColor = "#FAFAFA"
+secondaryBackgroundColor = "#FFFFFF"
+textColor = "#1A1D21"
+
+# Sans-serif is resolved by the browser. Streamlit's stack is already
+# -apple-system/Segoe/Roboto, which is the modern system look we want; pinning a
+# webfont would add a render-blocking request for no gain.
+font = "sans serif"
+
+[client]
+# Hide the "Running..." toolbar chip and the hamburger nav. The sidebar is ours
+# and the only page is this one, so both are noise in a demo. Does not affect
+# server behaviour.
+toolbarMode = "minimal"
+showSidebarNavigation = false

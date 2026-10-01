@@ -5,6 +5,9 @@ __pycache__/
 data/chroma/
 .streamlit/secrets.toml
 logs/
+# Screenshots written by scripts/check_ui_*.py during a UI review. Local
+# artefacts, regenerated on demand, not source.
+.ui-review-*.png
 # Regenerable verbose embedding dump (all 384 dims for all 177 chunks, ~1 MB).
 # The readable digest data/chunks/embeddings_preview.txt is tracked instead.
 data/chunks/embeddings_full.txt
