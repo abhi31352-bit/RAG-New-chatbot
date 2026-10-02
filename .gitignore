@@ -2,7 +2,11 @@
 .venv/
 __pycache__/
 *.pyc
-data/chroma/
+# data/chroma/ is deliberately NOT ignored. It holds the persisted ChromaDB
+# store that the app reads at query time. Streamlit Community Cloud has no build
+# step in which to ingest into it and its filesystem is ephemeral, so the store
+# ships in the repo and the deploy reads exactly the store built here.
+# Rebuild it only when the corpus changes: python -m src.ingest --force
 .streamlit/secrets.toml
 logs/
 # Screenshots written by scripts/check_ui_*.py during a UI review. Local

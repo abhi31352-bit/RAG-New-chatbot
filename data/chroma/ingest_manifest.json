@@ -1,0 +1,8 @@
+{
+  "fingerprint": "070661cb646269dacaa4d0e4d8f34484015e03700b1aee468f3b5047ba43f01a",
+  "embed_model": "sentence-transformers/all-MiniLM-L6-v2@384d",
+  "embed_dim": 384,
+  "chunk_count": 177,
+  "collection": "hdfc_faq",
+  "built_at": "2026-09-29T09:17:17"
+}
