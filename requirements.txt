@@ -1,8 +1,52 @@
+# Deployment dependencies.
+#
+# Two of these lines exist to make Streamlit Community Cloud able to install this
+# project at all, and both were found by running pip's resolver against the Linux
+# CPython combinations the platform actually uses. Both are explained where they
+# sit rather than here, so the reasoning travels with the line it applies to.
+
+# --- Application dependencies ------------------------------------------------
+# Imported by src/: streamlit (app), chromadb (retrieve/ingest),
+# sentence-transformers + torch (embedder, lazily at query time via retrieve),
+# numpy (embedder, retrieve), groq (llm), python-dotenv (config).
+# requests / beautifulsoup4 / lxml are imported by the one-shot ingest scripts
+# (scripts/, src/clean.py). They stay because ingestion is a separate process and
+# removing them would break re-ingestion on the platform.
+
+streamlit==1.38.0
+chromadb==0.5.5
+sentence-transformers==3.0.1
+groq==0.37.1
 requests==2.32.3
 beautifulsoup4==4.12.3
 lxml==5.3.0
 python-dotenv==1.0.1
-sentence-transformers==3.0.1
-chromadb==0.5.5
-groq==0.37.1
-streamlit==1.38.0
+
+# --- Lines that fix the Cloud install ----------------------------------------
+# Nothing below is stylistic. Each was measured, and each one was a hard
+# installation failure on Streamlit Community Cloud before it was added.
+
+# torch's default PyPI wheel for Linux x86_64 declares 14 CUDA dependencies
+# (nvidia-cudnn, cublas, cufft, nccl, triton, ...) which together with the wheel
+# itself come to 2.84 GiB. The platform's disk allowance cannot hold that, so the
+# installer died with a non-zero exit code. The same install succeeds on macOS
+# and on this laptop because every one of those CUDA dependencies is guarded by
+# `platform_system == "Linux"`, so they are simply not selected -- which is
+# exactly why the failure only ever appeared after deploying.
+#
+# This index publishes CPU-only builds that declare none of them. Without an
+# explicit torch pin below, pip would take the newest torch from PyPI and the CUDA
+# chain straight back, because the newest version on PyPI is higher than the
+# newest one here. The pin is what forces the CPU build; on Linux it resolves to
+# torch 2.6.0+cpu, and on macOS, where this index publishes no builds at all, it
+# falls back to the normal PyPI wheel. Do not "simplify" this into `torch==2.6.0+cpu`
+# -- that would break installs on macOS.
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+torch==2.6.0
+
+# Held below 2 deliberately. chromadb 0.5.5 predates numpy 2 and is not built or
+# tested against it; 1.26.4 is the last 1.x release and is what the local
+# environment, the persisted Chroma store and the tests were all verified on.
+# It also keeps the runtime off Python 3.13, where numpy 1.x has no wheel at all.
+numpy<2
