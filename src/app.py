@@ -226,6 +226,23 @@ def main() -> None:
 
     ui.render_header()
 
+    # Streamlit Community Cloud exposes dashboard secrets through st.secrets and
+    # also injects them into the environment, but the import-time get_config()
+    # above runs before that injection can be relied on. Mirror the key in when
+    # the environment does not already carry one, then refresh the cached Config
+    # so the check further down sees it. A local .env keeps priority, so this is
+    # a no-op locally. Must stay after set_page_config: reading st.secrets is a
+    # Streamlit command, and doing it earlier makes set_page_config raise
+    # "can only be called once" whenever no secrets file exists.
+    if not os.getenv("GROQ_API_KEY"):
+        try:
+            _secret = st.secrets.get("GROQ_API_KEY")
+        except Exception:
+            _secret = None
+        if _secret:
+            os.environ["GROQ_API_KEY"] = _secret
+            get_config().groq_api_key = _secret
+
     # Absorb the one-time embedder/chroma load here, while the header and welcome
     # text are still rendering, instead of on the user's first question. No
     # spinner, so if it is still in flight when they type, the answer is simply
