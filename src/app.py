@@ -109,13 +109,22 @@ def get_engine() -> AnswerEngine:
     return AnswerEngine(retriever=get_retriever(), client=LLMClient())
 
 
-@st.cache_data(show_spinner=False, ttl=300)
+@st.cache_resource(show_spinner=False, ttl=300)
 def retrieve_cached(question: str) -> List[RetrievedChunk]:
     """Cache retrieval by question text so a re-clicked example is instant.
 
     Only retrieval is cached. The LLM call is not: a replayed answer looks live
     but is not, and for a demo about grounding, showing a stale answer is worse
     than showing a one-second wait.
+
+    cache_resource, not cache_data. cache_data is meant for values it can
+    serialize, and it pickles whatever comes back on every call; a list of
+    RetrievedChunk is a plain object graph, not data to round-trip, so the
+    pickle bought nothing and was the only thing here that could fail. It did
+    fail on Streamlit Community Cloud with UnserializableReturnValueError,
+    which surfaced as the answer instead of an answer. cache_resource stores
+    the object by reference and never serializes it, which is what caching a
+    retrieval result actually needs. ttl is kept so a result still ages out.
     """
     return get_retriever().search(question)
 
