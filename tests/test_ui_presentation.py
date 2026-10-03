@@ -138,9 +138,15 @@ def test_scheme_label_prefers_the_first_named_chunk():
 
 
 def test_palette_is_green_led_and_never_groww_branded():
-    """Sanity on the design tokens: green primary, light page, readable ink."""
+    """Sanity on the design tokens: green primary, light page, readable ink.
+
+    The page colour is the Stitch design's `surface-50`. The set is a whitelist
+    of light neutrals rather than one value, so retargeting the palette does not
+    silently fall out of scope -- what matters is that it stays a near-white the
+    body ink can be read on.
+    """
     assert ui.GREEN.startswith("#") and len(ui.GREEN) == 7
-    assert ui.PAGE.upper() in {"#FAFAFA", "#FFFFFF", "#F8F9FA"}
+    assert ui.PAGE.upper() in {"#FAFAFA", "#FFFFFF", "#F8F9FA", "#F8FAFC"}
     # Contrast of body ink on the page background, WCAG AA for body text.
     def _lum(hex_color: str) -> float:
         r, g, b = (int(hex_color[i:i + 2], 16) / 255 for i in (1, 3, 5))
@@ -195,9 +201,64 @@ def _live_css() -> str:
     return src
 
 
+def test_the_stylesheet_has_balanced_parentheses():
+    """One missing `)` silently deletes everything after it.
+
+    A CSS selector with an unterminated functional pseudo-class -- written as
+    `:not(:has(.user-bubble)` instead of `:not(:has(.user-bubble))` -- does not
+    fail loudly. The browser drops that rule and then keeps dropping every rule
+    after it, because it is still inside a selector it cannot finish. Braces stay
+    balanced, so nothing about the source looks wrong.
+
+    That is not hypothetical. One missing paren in this file removed the avatar
+    rules, the 2x2 suggestion grid and the entire chat-input section from the
+    live page at once. Nothing in the suite noticed: the CSS-presence tests only
+    grep the source, and the source was full of the very selectors that were no
+    longer being applied. The page looked broken in three unrelated ways at once,
+    which is the signature that reads as three separate bugs rather than one.
+
+    Parenthesis balance is the cheapest check that sees it, and it cannot produce
+    a false alarm on this file: no declaration here contains a literal paren.
+    """
+    assert _live_css().count("(") == _live_css().count(")"), (
+        "unbalanced parentheses in the injected CSS; an unterminated selector "
+        "makes the browser discard it and every rule after it, while the source "
+        "still greps as if all of them are applied"
+    )
+
+
+def test_every_mono_face_is_important_too():
+    """The sans sweep is `!important`, so a plain mono declaration loses.
+
+    `inject_css` claims the typeface for the whole page with
+    `:where(...) { font-family: var(--sans) !important }`. An `!important`
+    declaration beats any non-important one regardless of specificity, so a
+    `--mono` rule written without `!important` renders in Inter -- which is how
+    the scheme tag column and the disclosure date quietly came out in the wrong
+    face, with the CSS reading correctly the whole time.
+
+    The fix is not obvious from the losing rule alone: `!important` is missing
+    from a line whose only defect is that another line two hundred lines up
+    wins over it.
+    """
+    offenders = [
+        line.strip()
+        for line in _live_css().splitlines()
+        if "var(--mono)" in line and "!important" not in line
+    ]
+    assert not offenders, f"mono faces that the sans sweep outranks: {offenders}"
+
+
 def test_css_caps_the_content_width():
-    """A 27" monitor should not leave the answer in a thin ribbon of white."""
-    assert "max-width: 980px" in _css()
+    """A 27" monitor should not leave the answer in a thin ribbon of white.
+
+    The number is the Stitch design's `max-w-3xl` on the message canvas, applied
+    to .block-container so the whole content column inherits it. It was 980px
+    before the visual port; 768px is what the mockup specifies, and the input's
+    column is capped at the same value (see the both-columns test below) so the
+    two cannot disagree.
+    """
+    assert "max-width: 768px" in _css()
 
 
 def test_css_does_not_reposition_the_chat_input_to_the_viewport():
@@ -334,9 +395,10 @@ def test_both_columns_are_given_the_same_box():
             f"{prop} differs between the content column and the input column: "
             f"{main[prop]!r} against {bottom[prop]!r}"
         )
-    assert "980px" in main["max-width"], (
-        "both columns are capped at the same readable width; a 27\" monitor "
-        "should not leave the answer in a thin ribbon of white"
+    assert "768px" in main["max-width"], (
+        "both columns are capped at the same readable width -- the Stitch "
+        "design's max-w-3xl. A 27\" monitor should not leave the answer in a "
+        "thin ribbon of white"
     )
 
 
@@ -420,13 +482,16 @@ def test_css_wraps_long_urls():
     assert "word-break: break-word" in css
 
 
-def test_css_hides_the_avatars_streamlit_actually_emits():
-    """Alignment and tint carry the role now that avatars are gone.
+def test_css_targets_the_avatars_streamlit_actually_emits():
+    """The avatar rules must name the testids 1.38 puts in the DOM.
 
-    The testid is checked against what 1.38 puts in the DOM. Writing
+    Whether those rules hide the avatars or style them, writing
     `stChatMessageContentAvatar` here -- a name that reads plausible but is not
     emitted -- is exactly the mistake this guards: the rule parses, the page
-    looks unaffected in tests, and the avatars stay on screen.
+    looks unaffected in tests, and the avatars are not what the design asked for.
+    Verified against the live DOM: the wrappers are stChatMessageAvatarUser and
+    stChatMessageAvatarAssistant, and they are siblings of stChatMessageContent
+    rather than children of it.
     """
     css = _css()
     assert "stChatMessageAvatarUser" in css

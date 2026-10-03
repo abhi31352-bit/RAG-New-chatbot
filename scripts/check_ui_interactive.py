@@ -24,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -161,8 +162,18 @@ async def main():
             await s.send("Runtime.enable")
             await s.send("Page.enable")
             await s.send("Page.navigate", url=URL)
-            if not await wait_for(s, "document.querySelector('.app-header')",
-                                  "landing page renders"):
+            # Wait for the column to finish painting, not just for the header.
+            # .app-header is drawn before warm_up() loads the embedder and the
+            # Chroma store, so a header-only wait plus a fixed 2s sleep measured
+            # a half-built page on a cold start: the click below reported "button
+            # not found" for cards that existed a second later.
+            # .compliance-banner is drawn last in the idle branch.
+            if not await wait_for(
+                s,
+                "document.querySelector('.app-header') && "
+                "document.querySelector('.compliance-banner')",
+                "landing page renders",
+            ):
                 return 1
             await asyncio.sleep(2)
 
@@ -246,8 +257,12 @@ async def main():
                   "groww.in" not in (body or ""),
                   "URL leaked into visible text")
 
-            check("last-updated line is visible",
-                  "Last updated from sources:" in (body or ""), "")
+            # The wording moved to the design's "Disclosed"; what has to stay on
+            # screen is the date itself, so that is what is asserted. The old
+            # check pinned the pipeline's literal "Last updated from sources:",
+            # which made a copy change look like a provenance regression.
+            check("the disclosure date is visible",
+                  bool(re.search(r"\b20\d\d-\d\d-\d\d\b", body or "")), "")
 
             # --- 6. overflow once a conversation is on screen ------------
             for w, h in [(1440, 900), (1280, 800), (820, 1180), (390, 844)]:
@@ -367,20 +382,40 @@ async def main():
                 check("refusal is explained, not silently empty",
                       len(last or "") > 20, repr(last)[:80])
 
-            # --- 10. avatars actually hidden ----------------------------
+            # --- 10. avatars are the design's circles ------------------------
+            # This used to assert the avatars were HIDDEN. The Stitch design
+            # gives every turn a 32px circle -- emerald for the assistant, slate
+            # for the reader -- and hiding them was a workaround for an alignment
+            # problem that the row-reverse rule solves for free. So the
+            # assertion is now the opposite one: they must be painted, square,
+            # 32px, and round. A rule that matches nothing still leaves the
+            # avatars visible here, so the size and radius are what actually
+            # prove our CSS is reaching them.
             avatars = await s.ev(
                 """(() => {
                   const av = [...document.querySelectorAll(
                     '[data-testid="stChatMessageAvatarUser"],'
                     + '[data-testid="stChatMessageAvatarAssistant"]')];
                   if (!av.length) return {count: 0, visible: 0};
+                  const seen = av.map(e => {
+                    const r = e.getBoundingClientRect();
+                    const c = getComputedStyle(e);
+                    return {w: Math.round(r.width), h: Math.round(r.height),
+                            radius: c.borderTopLeftRadius, bg: c.backgroundColor};
+                  });
                   return {count: av.length,
                           visible: av.filter(e => e.getBoundingClientRect().height > 0
-                                                 || getComputedStyle(e).display !== 'none').length};
+                                                 || getComputedStyle(e).display !== 'none').length,
+                          seen: seen.slice(0, 2)};
                 })()"""
             )
-            check("chat avatars exist but are hidden",
-                  avatars.get("count", 0) > 0 and avatars.get("visible") == 0,
+            seen = avatars.get("seen", [])
+            check("chat avatars are drawn as the design's 32px circles",
+                  avatars.get("count", 0) > 0
+                  and avatars.get("visible") == avatars.get("count")
+                  and all(abs(s["w"] - 32) <= 1 and abs(s["h"] - 32) <= 1
+                          and s["radius"].startswith("999")
+                          for s in seen),
                   str(avatars))
 
             # --- 11. console clean across the whole session -------------

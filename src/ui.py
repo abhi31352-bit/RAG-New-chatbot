@@ -5,23 +5,59 @@ it is handed an `Answer` and a list of chunks and told how to draw them. That
 separation is the point: if this module needed to reach into retrieval to render,
 a styling change could quietly break the pipeline.
 
-What the CSS is actually fighting
----------------------------------
-Streamlit's defaults are built for data tools, not for consumer fintech:
+The visual reference
+--------------------
+`ui design/stitch-desgin.html` is the Google Stitch mockup of this product: a
+light-surface fintech console. Its design tokens are transcribed below rather
+than reinvented, so every value here can be traced to a line of that file:
 
-  * `st.chat_message` gives every message a large tinted block with an avatar
-    bubble, so user and assistant text compete for attention. Here the user
-    bubble shrinks to a light green pill and the assistant answer sits on plain
-    white, because the answer is the thing being read.
-  * Source citations render as a long raw URL in a markdown link. A 70-character
-    URL is the widest element on the page and is what pushes the layout into
-    horizontal overflow. Here the URL is a compact "View source" link and the
-    full address is kept in `title=` so it is still available on hover.
-  * The sidebar repeats the full disclaimer paragraph, which is the most
-    visually dominant thing in a column that should be navigation.
+  * emerald 700 `#047857` is the single action colour; 600 `#059669` the accent,
+    800 `#065F46` the hover/emphasis, 50 `#ECFDF5` the tint, 200 `#A7F3D0` its
+    border. It replaces the earlier ad-hoc green, which was never emerald.
+  * slate carries all the text: 900 `#0F172A` headings, 600 `#475569` body,
+    500 `#64748B` secondary, 400 `#94A3B8` faint.
+  * `surface` is the neutral ramp: 50 `#F8FAFC` is the page, 100 `#F1F5F9` the
+    inset fill, 200 `#E2E8F0` every border, 300 `#CBD5E1` the input edge.
+  * Inter for text, JetBrains Mono for tags, timestamps and provenance. Both are
+    requested from Google Fonts; the stacks below them are the system fonts, so
+    a blocked or offline font request degrades to the platform face rather than
+    to nothing.
+  * three named shadows: `subtle`, `card` and `elevation`. Only the first two
+    are used -- `elevation` is for the mockup's floating panels, and using it on
+    a chat answer would read as a dev dashboard.
+  * 6px pill scrollbar with a `#CBD5E1` thumb, carried over verbatim.
 
-Colour is declared once, as custom properties, so the palette is greppable and
-the green cannot drift between the header, the buttons and the links.
+Layout follows the mockup's grid: a 56px top bar, a 256px sidebar, and a
+centred 768px (`max-w-3xl`) message canvas and composer sharing one column. The
+mockup's column is `max-w-3xl` inside a `px-6` canvas; here the shared `--gutter`
+is that 24px inset, so the painted column lands at 720px rather than 768. That
+28px is the price of keeping ONE gutter variable feeding both the content column
+and the input column, which is what stops the question box drifting away from
+the answers it is answering.
+
+What is deliberately NOT ported
+-------------------------------
+The mockup is a static showcase, and three of its elements exist only to
+demonstrate states that a real page does not have. Re-creating them here would
+mean shipping controls that do nothing:
+
+  * the "Preview: Landing / User Asked / Generating / ..." switcher -- the
+    mockup's own scaffolding for reviewing six states in one screenshot.
+  * Share / Bookmark / Feedback / GitHub in the top bar -- icons with no
+    handler behind them.
+  * the "Verified AMC Cache / 100% Match / Synced Oct 2026" sidebar pill -- a
+    provenance claim this app cannot make about its own index.
+
+Two more are out of reach without touching the pipeline, so they stay out:
+
+  * the answer card's big primary stat and its mono spec grid (Benchmark Index,
+    Minimum SIP, Exit Load, Riskometer Level). Reproducing those means reading
+    fields out of the model's prose, which is answer-generation logic.
+  * the compliance paragraph under the composer. In the mockup it sits in a
+    fixed footer. Here the question bar is in-flow and sticky, so growing it by
+    a paragraph's height pushes the gap under it past what the layout gates
+    allow. The disclaimer is still on screen throughout a conversation, via the
+    header pill and the sidebar strip.
 """
 from __future__ import annotations
 
@@ -31,35 +67,77 @@ from typing import List, Optional, Sequence
 
 import streamlit as st
 
-# Groww-inspired palette, NOT Groww branding. Green is the action/accent colour
-# because that is the convention for Indian investing products and it reads as
-# "gain/positive" in this category; the specific values below are chosen for
-# contrast on a near-white background, not copied from any brand.
-GREEN = "#0F9D58"
-GREEN_DARK = "#0B7A45"
-GREEN_TINT = "#EAF7F0"
-GREEN_RING = "rgba(15, 157, 88, 0.18)"
+# --- Design tokens, transcribed from the Stitch mockup -----------------------
 
-INK = "#1A1D21"
-MUTED = "#6B7280"
-FAINT = "#9AA1A9"
-BORDER = "#E8EAED"
+# Emerald is the action and accent colour: one fill, reserved for the single
+# primary action on the page (the send button) and for anything that is meant to
+# read as a verified link or state. Nothing else wears it as a background.
+GREEN = "#047857"          # emerald-700 -- primary action
+GREEN_DARK = "#065F46"     # emerald-800 -- hover, emphasis inside prose
+GREEN_MID = "#059669"      # emerald-600 -- status dots, glyphs, icon strokes
+GREEN_TINT = "#ECFDF5"     # emerald-50  -- pills, active nav, link chips
+GREEN_EDGE = "#A7F3D0"     # emerald-200 -- borders on tinted surfaces
+GREEN_RING = "rgba(5, 150, 105, 0.18)"
+
+INK = "#0F172A"            # slate-900 -- headings
+BODY = "#334155"           # slate-700 -- answer prose
+MUTED = "#475569"          # slate-600 -- secondary text
+FAINT = "#94A3B8"          # slate-400 -- labels, provenance
+BORDER = "#E2E8F0"         # surface-200 -- every hairline
+EDGE = "#CBD5E1"           # surface-300 -- input border
+SURFACE = "#F1F5F9"        # surface-100 -- inset fills
 CARD = "#FFFFFF"
-PAGE = "#FAFAFA"
-DANGER = "#B42318"
-DANGER_TINT = "#FEF3F2"
+PAGE = "#F8FAFC"           # surface-50 -- the page itself
+SLATE_DARK = "#0F172A"     # slate-900 -- the user bubble's fill
+
+DANGER = "#E11D48"         # rose-600 -- scope refusals
+DANGER_DARK = "#9F1239"    # rose-800
+DANGER_TINT = "#FFF1F2"    # rose-50
+DANGER_EDGE = "#FECDD3"    # rose-200
 WARN_TINT = "#FFFAEB"
 WARN_INK = "#B54708"
+WARN_EDGE = "#FDE68A"
+
+# Typefaces. The webfonts are requested by inject_css(); these stacks name the
+# platform fallback so a blocked request changes the face, not the layout.
+SANS = "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+MONO = "'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace"
+
+# The mockup's three shadows, by name.
+SHADOW_SUBTLE = "0 1px 3px 0 rgba(0, 0, 0, 0.04), 0 1px 2px -1px rgba(0, 0, 0, 0.03)"
+SHADOW_CARD = "0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -2px rgba(0, 0, 0, 0.04)"
+
+FONT_LINK = (
+    '<link rel="preconnect" href="https://fonts.googleapis.com">'
+    '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
+    '<link rel="stylesheet" '
+    'href="https://fonts.googleapis.com/css2'
+    '?family=Inter:wght@400;500;600;700'
+    '&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap">'
+)
 
 # Sidebar shows the five scheme names; each gets a short glyph so the list scans
 # faster than five identical bullets. These are text, not icon assets -- no
-# external files, no licensing questions, and they inherit font colour.
+# external files, no licensing questions, and they inherit font colour. The
+# glyph shapes and the mono tag column both come from the mockup's sidebar.
 SCHEME_GLYPHS = {
     "Large Cap": "◆",
     "Flexi Cap": "◇",
     "ELSS Tax Saver": "■",
     "Small Cap": "▲",
     "Balanced Advantage": "●",
+}
+
+# The mockup tags each row with a plan or category. Every scheme in this corpus
+# is Direct-Growth, so three rows legitimately repeat -- that is information,
+# not a copy-paste slip: it is the reader's confirmation that the facts on offer
+# are all Direct-Growth NAVs.
+SCHEME_TAGS = {
+    "Large Cap": "Direct-G",
+    "Flexi Cap": "Direct-G",
+    "ELSS Tax Saver": "80C",
+    "Small Cap": "Direct-G",
+    "Balanced Advantage": "Hybrid",
 }
 
 SIDEBAR_SCHEMES = (
@@ -73,112 +151,277 @@ SIDEBAR_SCHEMES = (
 
 def inject_css() -> None:
     """Install the stylesheet. Called once per script run, before any widgets."""
+    st.markdown(FONT_LINK, unsafe_allow_html=True)
     st.markdown(f"""<style>
 :root {{
   --green: {GREEN};
   --green-dark: {GREEN_DARK};
+  --green-mid: {GREEN_MID};
   --green-tint: {GREEN_TINT};
+  --green-edge: {GREEN_EDGE};
+  --green-ring: {GREEN_RING};
   --ink: {INK};
+  --body: {BODY};
   --muted: {MUTED};
   --faint: {FAINT};
   --border: {BORDER};
+  --edge: {EDGE};
+  --surface: {SURFACE};
   --card: {CARD};
   --page: {PAGE};
   --danger: {DANGER};
+  --danger-dark: {DANGER_DARK};
   --danger-tint: {DANGER_TINT};
+  --danger-edge: {DANGER_EDGE};
+  --warn-tint: {WARN_TINT};
+  --warn-ink: {WARN_INK};
+  --shadow-subtle: {SHADOW_SUBTLE};
+  --shadow-card: {SHADOW_CARD};
+  --sans: {SANS};
+  --mono: {MONO};
 }}
 
 html, body, .stApp, [data-testid="stAppViewContainer"] {{
   background: var(--page);
+  font-family: var(--sans);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }}
 
+/* The mockup's 6px pill scrollbar, carried over verbatim. Streamlit's default
+   is wide and square and it shows up along the transcript on every long answer. */
+::-webkit-scrollbar {{ width: 6px; height: 6px; }}
+::-webkit-scrollbar-track {{ background: transparent; }}
+::-webkit-scrollbar-thumb {{ background: {EDGE}; border-radius: 9999px; }}
+::-webkit-scrollbar-thumb:hover {{ background: #94A3B8; }}
+
 /* --- Typography scale ----------------------------------------------------- */
-.stApp h1 {{ font-size: 2rem !important; line-height: 1.2 !important;
-  letter-spacing: -0.02em; font-weight: 650 !important; color: var(--ink); }}
-.stApp h2, .stApp h3 {{ letter-spacing: -0.01em; color: var(--ink); }}
-/* Muted everything Streamlit marks as caption. These are the secondary lines:
-   dates, hints, scheme subtitles. They were competing with body text. */
+/* The design's typeface, on everything.
+
+   Streamlit 1.38 puts Source Sans Pro on [data-testid="stAppViewContainer"]
+   through an emotion class, which wins on specificity and left almost the whole
+   page in Streamlit's face: only the elements we style by hand -- the
+   suggestion cards and the textarea -- came out in Inter, so the page mixed two
+   typefaces with no rule saying so.
+
+   :where() gives this declaration ZERO specificity, and !important is what
+   carries it past Streamlit's own rules. That combination is deliberate: it is
+   the only way to say "the typeface is the design's, everywhere, and no author
+   rule of ours or Streamlit's outranks it" without a !important on every
+   element. The mono faces below are !important for the same reason and do win,
+   because among two important declarations the more specific one applies --
+   and :where() is the least specific thing in CSS. */
+:where(html, body, .stApp, .stApp *, [data-testid="stAppViewContainer"],
+       [data-testid="stAppViewContainer"] *) {{
+  font-family: var(--sans) !important;
+}}
+/* Code stays mono. Folding it into the sans sweep would have been a regression
+   in the other direction. */
+:where(code, pre, pre *, .stApp code, .stApp pre, .stApp pre *) {{
+  font-family: var(--mono) !important;
+}}
+.stApp h1 {{ font-size: 1.875rem !important; line-height: 1.2 !important;
+  letter-spacing: -0.025em; font-weight: 700 !important; color: var(--ink); }}
+.stApp h2, .stApp h3 {{ letter-spacing: -0.02em; color: var(--ink); }}
+/* Everything Streamlit marks as a caption is provenance in this design: scheme
+   subtitles, chunk counts, the disclosure date. Mono, faint, small. */
 .stApp .stCaptionContainer p, .stApp [data-testid="stCaptionContainer"] p,
-.stApp small {{ color: var(--muted) !important; font-size: 0.8125rem; }}
-.stApp p, .stApp li {{ color: var(--ink); line-height: 1.62;
-  overflow-wrap: anywhere; word-break: normal; }}
+.stApp small {{ color: var(--faint) !important; font-size: 0.6875rem;
+  font-family: var(--mono) !important; }}
 .stApp a {{ color: var(--green); text-decoration: none;
   overflow-wrap: anywhere; word-break: break-word; }}
 .stApp a:hover {{ text-decoration: underline; }}
+/* Prose is slate-700, not slate-900: the answer is a reading surface, and the
+   headings already carry the ink. */
+.stApp p, .stApp li {{ color: var(--body); line-height: 1.62;
+  overflow-wrap: anywhere; word-break: break-word; }}
 
 hr {{ border-color: var(--border) !important; margin: 1.25rem 0 !important; }}
 
 /* --- Layout: centred column, never wider than needed --------------------- */
 /* --gutter is the shared horizontal inset. .block-container and the chat input
    both read it, which is the only reason those two stay on the same vertical
-   lines. The three steps mirror Streamlit's own responsive padding, measured:
-   80px above 768px, 16px down to 481px, 12px at 480px and under. */
+   lines. It is the mockup's `px-6` at desktop; the two narrow steps below are
+   Streamlit's own responsive insets, which the mockup does not specify. */
 :root {{
-  --gutter: 80px;
+  --gutter: 24px;
 }}
 @media (max-width: 768px) {{ :root {{ --gutter: 16px; }} }}
 @media (max-width: 480px) {{ :root {{ --gutter: 12px; }} }}
 
-/* The single biggest visual problem: default Streamlit content spans the full
-   browser width, so on a 27" monitor the answer text sits in a thin ribbon in
-   the middle of an ocean of white. Capping block width and centring fixes it. */
+/* The mockup's canvas is `px-6` around a `max-w-3xl` column. The cap is the
+   same 768px, applied to .block-container and to the input's column alike.
+
+   Bottom clearance for the sticky input bar.
+   [data-testid="stBottom"] is in-flow and sticky, so it occupies its own height
+   at the end of the scroll content rather than floating over it. Scrolled fully
+   down, the block's content bottom therefore lands exactly on the top of the
+   input. That in-flow reservation is the real reason answers are never hidden:
+   it is what Streamlit's scroll-to-bottom measures against, and it is why
+   replacing it with a viewport-pinned input (as an earlier version did) broke
+   both the clearance and the auto-scroll at once.
+   This padding is the small breathing gap ON TOP of that. */
 .block-container {{
-  max-width: 980px !important;
+  max-width: 768px !important;
   padding-top: 1.5rem !important;
-  /* Bottom clearance for the sticky input bar.
-     [data-testid="stBottom"] is position:sticky and -- crucially -- still in
-     flow, so it occupies its own 177px at the end of the scroll content rather
-     than floating over it. Scrolled fully down, the block's content bottom
-     therefore lands exactly on the top of the input. That in-flow reservation
-     is the real reason answers are never hidden: it is what Streamlit's
-     scroll-to-bottom measures against, and it is why replacing it with a
-     hand-rolled `position: fixed` input (as an earlier version did) broke both
-     the clearance and the auto-scroll at once.
-     This padding is the small breathing gap ON TOP of that, so the last answer
-     rests just above the bar instead of touching it. */
   padding-bottom: 1.75rem !important;
   padding-left: var(--gutter) !important;
   padding-right: var(--gutter) !important;
   margin: 0 auto !important;
 }}
 
-/* Example-card row. Streamlit lays columns out in a fixed-width flex row that
-   scrolls sideways on a phone; wrapping to full-width blocks is what keeps the
-   "no horizontal scrolling" promise true on a 375px screen.
+/* The suggestion row. Streamlit lays columns out in a fixed-width flex row
+   that scrolls sideways on a phone; wrapping to full-width blocks is what keeps
+   the "no horizontal scrolling" promise true at 390px.
 
    The column's testid in 1.38 is `column`, not `stColumn`: counted in the live
    DOM, `[data-testid="stColumn"]` matches 0 elements while
    `[data-testid="column"]` matches 4. Rules written against the older name match
-   nothing at all, which had quietly killed this rule, the desktop grid below and
-   the mobile stacking rule -- all three. `stColumn` is kept alongside `column` so
-   the layout survives a rename in either direction. */
-[data-testid="stHorizontalBlock"] {{ gap: 0.6rem; }}
+   nothing at all, which had quietly killed this rule and the two grid rules
+   below. `stColumn` is kept alongside `column` so the layout survives a rename
+   in either direction. */
+[data-testid="stHorizontalBlock"] {{ gap: 0.75rem; }}
 [data-testid="stHorizontalBlock"] > [data-testid="column"],
 [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {{ min-width: 0; }}
 
 /* --- Header --------------------------------------------------------------- */
-[data-testid="stHeader"] {{ background: transparent; height: 0; }}
-[data-testid="stToolbar"] {{ right: 8px; }}
-#MainMenu, footer, [data-testid="stDecoration"] {{ display: none; }}
+/* The mockup's `h-14` top bar: 56px, translucent white over a blur, one
+   hairline underneath. In Streamlit this sits inside the content column rather
+   than spanning the viewport, so it reads as the same bar scoped to the
+   conversation instead of to the window. */
+.app-header {{
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 1rem; min-height: 3.5rem;
+  padding: 0 0.25rem 0 0; margin-bottom: 1.25rem;
+  border-bottom: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.95);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+}}
+.app-header-left {{
+  display: flex; align-items: center; gap: 0.875rem; min-width: 0;
+}}
+.app-brand {{
+  font-size: 0.875rem; font-weight: 600; color: var(--ink);
+  letter-spacing: -0.01em;
+  display: flex; align-items: center; gap: 0.5rem; white-space: nowrap;
+}}
+/* The mockup's ping: a solid emerald-600 dot inside an expanding emerald-400
+   ring. It is the only motion in the header, and it is what makes the bar read
+   as "live" rather than as a static wordmark.
+
+   The ring is a box-shadow rather than a second, overlapped element on purpose.
+   Two elements would need one taken out of the flow to sit on top of the other,
+   and this module has a standing rule that nothing may be positioned that way
+   -- a box positioned against its nearest positioned ancestor stops tracking
+   the column it lives in, which is exactly how the question box came to sit
+   398px away from the answers once already. A shadow pulse needs no second box
+   at all, and it animates without touching layout. */
+.brand-dot {{
+  display: inline-block; flex-shrink: 0;
+  width: 10px; height: 10px; border-radius: 999px; background: var(--green-mid);
+  animation: brand-ping 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;
+}}
+@keyframes brand-ping {{
+  0% {{ box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.75); }}
+  70% {{ box-shadow: 0 0 0 6px rgba(52, 211, 153, 0); }}
+  100% {{ box-shadow: 0 0 0 0 rgba(52, 211, 153, 0); }}
+}}
+.app-sep {{ font-size: 0.75rem; color: var(--faint); }}
+.app-tagline {{
+  font-size: 0.75rem; color: var(--muted); white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis;
+}}
+.facts-pill {{
+  background: var(--green-tint); color: var(--green);
+  border: 1px solid rgba(5, 150, 105, 0.28);
+  border-radius: 999px; padding: 0.125rem 0.5rem;
+  font-size: 0.6875rem; font-weight: 500; white-space: nowrap; flex-shrink: 0;
+}}
+
+/* --- Sidebar -------------------------------------------------------------- */
+/* The mockup's `w-64` on a `slate-50/80` field. 256px, not the 288px it uses at
+   `lg`: 288 would take a quarter of a 1440px screen, and every measured budget
+   for this column tops out at 280px. The four navigation rows and the two-line
+   disclaimer fit in 256 comfortably. The main column reflows on its own when
+   this changes, so nothing else has to be pinned. */
+[data-testid="stSidebar"] {{
+  background: var(--page);
+  border-right: 1px solid var(--border);
+  width: 256px !important;
+  min-width: 256px !important;
+}}
+[data-testid="stSidebar"] .block-container {{ padding-top: 1rem; }}
+[data-testid="stSidebar"] .stMarkdown p {{ font-size: 0.75rem; }}
+.sidebar-head {{
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 0.5rem; margin-bottom: 0.75rem; padding: 0 0.5rem;
+}}
+.sidebar-title {{
+  font-size: 0.6875rem; text-transform: uppercase; letter-spacing: 0.075em;
+  color: var(--faint); font-weight: 700; margin: 0;
+}}
+.sidebar-count {{
+  font-size: 0.625rem; font-weight: 600; color: var(--muted);
+  background: rgba(226, 232, 240, 0.7);
+  border-radius: 999px; padding: 0.125rem 0.375rem; white-space: nowrap;
+}}
+.scheme-nav {{ display: flex; flex-direction: column; gap: 0.25rem; }}
+.scheme-item {{
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 0.625rem; padding: 0.5rem 0.75rem; border-radius: 8px;
+  font-size: 0.75rem; color: var(--ink); font-weight: 500;
+  border: 1px solid transparent;
+  transition: background-color .14s ease, border-color .14s ease;
+}}
+.scheme-item:hover {{
+  background: rgba(226, 232, 240, 0.5); color: var(--ink);
+}}
+.scheme-glyph {{ color: var(--green-mid); font-size: 0.625rem; width: 0.625rem; }}
+.scheme-tag {{
+  font-family: var(--mono) !important; font-size: 0.625rem; color: var(--faint);
+  white-space: nowrap;
+}}
+/* The sidebar's pinned disclaimer, in the mockup's two-line form. Short by
+   design -- the long form is the compliance banner on the landing page, and
+   repeating a 60-word paragraph here made the sidebar the most visually
+   dominant column on the page. */
+.disclaimer-strip {{
+  font-size: 0.6875rem; color: var(--faint); line-height: 1.5;
+  border-top: 1px solid var(--border); padding: 1rem; margin: 0.5rem 0 0 0;
+  background: rgba(255, 255, 255, 0.7);
+}}
+.disclaimer-strip strong {{
+  display: block; color: var(--ink); font-weight: 600; margin-bottom: 0.125rem;
+}}
+
+/* Developer options, drawn as the mockup's accordion: hairline box, a slate
+   header strip, mono values inside. Streamlit's own summary element carries
+   the chevron, so the arrow needs no markup of ours. */
+[data-testid="stExpander"] {{
+  border: 1px solid var(--border); border-radius: 8px;
+  background: var(--card); margin-top: 0.75rem;
+}}
+details summary {{
+  font-size: 0.6875rem; color: var(--muted); background: var(--surface);
+  padding: 0.5rem 0.75rem;
+}}
 
 /* --- Cards --------------------------------------------------------------- */
-/* Generic surface. Restrained: 1px border, 10px radius, one very soft shadow.
-   Deliberately NOT a heavy drop shadow -- that reads as a dev dashboard. */
+/* Generic surface: the mockup's 1px border + `card` shadow. Deliberately NOT
+   `elevation` -- that reads as a dev dashboard. */
 [data-testid="stVerticalBlockBorderWrapper"] {{
   background: var(--card); border: 1px solid var(--border);
   border-radius: 12px; padding: 1rem 1.15rem;
-  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+  box-shadow: var(--shadow-subtle);
 }}
 
 /* --- Chat messages -------------------------------------------------------- */
-/* User: right-aligned, tinted pill. Assistant: left, white, no heavy block.
-   Streamlit nests the avatar, so the alignment is done on the inner content.
-
-   Turn rhythm. Streamlit's own [data-testid="stChatMessage"] carries 16px of
-   padding top AND 16px bottom, and there was another 8px of margin on top of
-   that: 40px of chrome per turn, 24px of it between a question and its own
-   answer. That padding is where the conversation's looseness came from, and it
-   is dropped here.
+/* Turn rhythm. Streamlit's own [data-testid="stChatMessage"] carries 16px of
+   padding top AND bottom, plus 8px of margin on top: 40px of chrome per turn,
+   24px of it between a question and its own answer. That is where the
+   conversation's looseness came from, and it is dropped here.
 
    What replaces it is asymmetric on purpose, because chat reads in pairs: a
    question sits close to the answer it produced, and a clear break falls after
@@ -187,151 +430,263 @@ hr {{ border-color: var(--border) !important; margin: 1.25rem 0 !important; }}
   padding-top: 0 !important;
   padding-bottom: 0 !important;
   margin-bottom: 0 !important;
+  display: flex; align-items: flex-start; gap: 0.75rem;
 }}
 /* Streamlit marks no role on the message, so the .user-bubble rendered inside
    it is what identifies a user turn, via :has(). */
 [data-testid="stChatMessage"]:has(.user-bubble) {{
-  margin-bottom: 0.45rem !important;
+  flex-direction: row-reverse;
+  margin-bottom: 0.5rem !important;
 }}
 [data-testid="stChatMessage"]:not(:has(.user-bubble)) {{
-  margin-bottom: 1.05rem !important;
+  margin-bottom: 1.25rem !important;
 }}
-/* Hide the default avatars. They are large, repeated on every turn, and the
-   user/assistant distinction is already carried by alignment and tint.
-   Testids verified against the live DOM in 1.38: the avatar wrappers are
-   stChatMessageAvatarUser / stChatMessageAvatarAssistant, and the message body
-   is stChatMessageContent. There is no stChatMessageContentBody. The older
-   stChatMessageContentAvatar name is kept as a no-op safety net. */
+
+/* Avatars. The mockup gives every turn a 32px circle -- emerald for the
+   assistant, slate for the reader -- and they are the reason a turn reads as a
+   conversation rather than as a log. These were hidden outright; hiding them
+   bought alignment that the row-reverse above already provides for free, so they
+   are back, wearing the mockup's circles.
+
+   Streamlit renders a Material glyph inside an emotion-classed div. Verified in
+   the live DOM: the avatar wrappers are stChatMessageAvatarUser /
+   stChatMessageAvatarAssistant and they are SIBLINGS of stChatMessageContent,
+   both children of stChatMessage. That is why row-reverse moves the reader's
+   avatar to the right without touching either element's order. */
 [data-testid="stChatMessageAvatarUser"],
-[data-testid="stChatMessageAvatarAssistant"],
-[data-testid="stChatMessageContentAvatar"] {{ display: none; }}
+[data-testid="stChatMessageAvatarAssistant"] {{
+  display: flex !important;
+  align-items: center; justify-content: center;
+  flex-shrink: 0; width: 2rem; height: 2rem; min-width: 2rem;
+  border-radius: 999px; margin-top: 0.125rem;
+}}
+[data-testid="stChatMessageAvatarAssistant"] {{
+  background: var(--green); color: #FFFFFF;
+  box-shadow: var(--shadow-subtle);
+}}
+[data-testid="stChatMessageAvatarAssistant"] svg {{
+  width: 1.25rem; height: 1.25rem;
+}}
+[data-testid="stChatMessageAvatarUser"] {{ background: #E2E8F0; color: #334155; }}
+[data-testid="stChatMessageAvatarUser"] svg {{ width: 1.125rem; height: 1.125rem; }}
+
+/* The older name is kept as a no-op safety net against a rename. */
+[data-testid="stChatMessageContentAvatar"] {{ display: flex !important; }}
 [data-testid="stChatMessageContent"] {{ gap: 0; align-items: flex-start; }}
 [data-testid="stChatMessageContent"] {{
-  font-size: 0.9375rem; line-height: 1.65; overflow-wrap: anywhere;
-  word-break: normal; min-width: 0;
+  font-size: 0.875rem; line-height: 1.65; overflow-wrap: anywhere;
+  word-break: break-word; min-width: 0; flex: 1;
 }}
-/* The citation row and the "Last updated" line are siblings of the answer card,
-   inside the message body. Streamlit stacks those blocks with its own margins;
-   give them a deliberate, smaller gap instead. */
+/* The citation row and the status notice are siblings of the answer card inside
+   the message body. Streamlit stacks those blocks with its own margins; give
+   them a deliberate, smaller gap instead. */
 [data-testid="stChatMessage"] [data-testid="stChatMessageContent"]
-  .source-row {{ margin-top: 0.5rem; }}
+  .source-row {{ margin-top: 0; }}
 [data-testid="stChatMessage"] [data-testid="stChatMessageContent"]
   .source-date {{ margin-top: 0.15rem; }}
 [data-testid="stChatMessage"] [data-testid="stChatMessageContent"] .notice {{
   margin-top: 0.5rem;
 }}
 
-/* User message = tinted, narrower, pushed right. Streamlit has no role
-   attribute on the message, so the .user-bubble marker inside it is what
-   identifies the role, via :has(). */
-[data-testid="stChatMessage"]:has(.user-bubble) {{
-  flex-direction: row-reverse;
-}}
+/* User message. The mockup's bubble is slate-900 on white with the tail corner
+   squared off (`rounded-2xl rounded-tr-sm`), which is the whole reason the
+   bubble looks like a bubble: the corner nearest the assistant's reply is cut
+   away. It was previously a green tint, which made the question read as a
+   positive signal rather than as something the reader said. */
 .user-bubble {{
-  background: var(--green-tint);
-  border: 1px solid rgba(15, 157, 88, 0.18);
-  border-radius: 14px;
-  padding: 0.55rem 0.9rem;
-  color: var(--ink);
-  max-width: 78%;
+  background: {SLATE_DARK};
+  color: #FFFFFF;
+  border-radius: 16px;
+  border-bottom-right-radius: 4px;
+  padding: 0.75rem 1rem;
+  max-width: 512px;
   display: inline-block;
   margin-left: auto;
-  font-size: 0.9375rem; line-height: 1.55;
+  font-size: 0.875rem; font-weight: 500; line-height: 1.5;
+  overflow-wrap: anywhere; word-break: break-word;
 }}
 
 /* Assistant answer: a real bordered container (st.container(border=True)), so
    the card exists in Streamlit's own DOM rather than in a hand-written div.
    This is the element the user came to read, so it gets the most space and the
-   least decoration. */
+   most generous padding: the mockup's `rounded-2xl p-5 shadow-card`. */
 [data-testid="stChatMessage"] [data-testid="stVerticalBlockBorderWrapper"] {{
   background: var(--card);
   border-color: var(--border);
-  border-radius: 12px;
-  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+  border-radius: 16px;
+  box-shadow: var(--shadow-card);
+  padding: 1.25rem;
   overflow-wrap: anywhere;
 }}
 [data-testid="stChatMessage"] [data-testid="stVerticalBlockBorderWrapper"] p {{
   margin: 0;
-  font-size: 1rem; line-height: 1.68; color: var(--ink);
+  font-size: 0.875rem; line-height: 1.7; color: var(--body);
 }}
+[data-testid="stChatMessage"] [data-testid="stVerticalBlockBorderWrapper"]
+  strong {{ color: var(--ink); font-weight: 600; }}
+[data-testid="stChatMessage"] [data-testid="stVerticalBlockBorderWrapper"]
+  ul, ol {{ color: var(--body); }}
 
 /* --- Source row ----------------------------------------------------------- */
-/* The old citation printed the whole groww.in URL inline. That is ~70 chars of
-   unbroken text: the widest thing on the page, and the direct cause of
-   horizontal overflow. It becomes a compact row, with the full URL kept in
-   title= for hover and for screen readers. The address itself is unchanged --
-   only its presentation. */
+/* The mockup's citation box: a hairline above, an emerald-tinted link carrying
+   the source's own name, then the verified pill and the mono disclosure date.
+   The full URL is never printed inline -- a 70-character address is the widest
+   element on the page and was the direct cause of horizontal overflow. It stays
+   in href= and in title=, so it is one hover (or one screen reader) away. */
 .source-row {{
-  display: flex; flex-wrap: wrap; align-items: baseline;
-  gap: 0.4rem 0.6rem; margin-top: 0.15rem; min-width: 0;
-}}
-.source-label {{
-  font-size: 0.6875rem; text-transform: uppercase; letter-spacing: 0.06em;
-  color: var(--faint); font-weight: 600;
+  display: flex; flex-wrap: wrap; align-items: center;
+  gap: 0.4rem 0.625rem; margin-top: 0.15rem; min-width: 0;
+  padding-top: 0.75rem; border-top: 1px solid var(--surface);
 }}
 .source-link {{
-  font-size: 0.8125rem; color: var(--green); font-weight: 550;
+  display: inline-flex; align-items: center; gap: 0.375rem;
+  font-size: 0.6875rem; color: var(--green); font-weight: 500;
+  background: rgba(236, 253, 245, 0.7);
+  border-radius: 6px; padding: 0.25rem 0.625rem;
+  transition: background-color .14s ease;
+}}
+.source-link:hover {{ background: rgba(167, 243, 208, 0.6); }}
+.source-label {{ color: var(--green); }}
+/* The mockup's "Verified Fact" badge. Emitted only when the answer carries a
+   source address, which is the condition the pipeline's validator sets -- so
+   the claim it makes is the app's own grounding claim, not a new one. */
+.verified-pill {{
+  display: inline-flex; align-items: center; gap: 0.25rem;
+  padding: 0.125rem 0.5rem; border-radius: 4px;
+  background: var(--green-tint); color: var(--green);
+  border: 1px solid var(--green-edge);
+  font-size: 0.6875rem; font-weight: 500; white-space: nowrap;
+}}
+.verified-pill::before {{
+  content: ""; width: 8px; height: 5px; flex-shrink: 0;
+  border-left: 1.6px solid var(--green-mid);
+  border-bottom: 1.6px solid var(--green-mid);
+  transform: rotate(-45deg) translate(1px, -1px);
+}}
+.source-meta, .source-date {{
+  font-family: var(--mono) !important; font-size: 0.625rem; color: var(--faint);
   white-space: nowrap;
 }}
-.source-meta {{ font-size: 0.8125rem; color: var(--muted); }}
-.source-date {{ font-size: 0.75rem; color: var(--faint); margin-top: 0.3rem; }}
+.source-date {{ margin-top: 0; }}
 
 /* --- Buttons -------------------------------------------------------------- */
-/* Example suggestions. Green fill is reserved for the one primary action (the
-   send button) so it keeps meaning.
+/* Suggestion cards. The mockup's card is `p-4 rounded-xl` over a `shadow-xs`,
+   lifting to `shadow-card` and taking an emerald-60 border and a faint emerald
+   wash on hover.
+
+   Green fill stays reserved for the one primary action (the send button) so it
+   keeps its meaning.
 
    These were laid out four across by Streamlit: 188px per column for a 40-44
-   character question, so every one of them wrapped onto 4-5 lines and measured
-   99px tall. That reads as a content card, not a suggestion. Forcing a 2x2 grid
-   above 768px gives each one ~385px, which is two lines and roughly half the
-   height. Below 768px the existing media query already stacks them full width. */
+   character question, so every one wrapped onto 4-5 lines. Forcing a 2x2 grid
+   above 768px gives each one ~354px, which is two lines. Below 768px the
+   existing media query stacks them full width. */
 @media (min-width: 769px) {{
   [data-testid="stHorizontalBlock"] {{ flex-wrap: wrap; }}
   [data-testid="stHorizontalBlock"] > [data-testid="column"],
   [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {{
-    flex: 1 1 calc(50% - 0.3rem) !important;
-    max-width: calc(50% - 0.3rem) !important;
+    flex: 1 1 calc(50% - 0.375rem) !important;
+    max-width: calc(50% - 0.375rem) !important;
   }}
 }}
 .stButton > button {{
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 12px;
   color: var(--ink);
-  font-size: 0.8125rem; font-weight: 500;
-  padding: 0.5rem 0.75rem;
+  font-size: 0.875rem; font-weight: 500;
+  padding: 1rem;
   text-align: left; line-height: 1.4;
-  height: auto; min-height: 0;
+  height: 6rem; min-height: 0;
   transition: border-color .15s ease, background-color .15s ease,
-              box-shadow .15s ease;
-  box-shadow: none;
+              box-shadow .15s ease, color .15s ease;
+  box-shadow: var(--shadow-subtle);
 }}
 .stButton > button:hover {{
-  border-color: rgba(15, 157, 88, 0.45);
-  background: var(--green-tint);
-  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.05);
+  border-color: rgba(5, 150, 105, 0.45);
+  background: rgba(236, 253, 245, 0.5);
+  box-shadow: var(--shadow-card);
   color: var(--green-dark);
 }}
 .stButton > button:focus-visible {{
   outline: 2px solid var(--green); outline-offset: 2px;
 }}
-.stButton > button:active {{ background: rgba(15, 157, 88, 0.10); }}
+.stButton > button:active {{ background: rgba(236, 253, 245, 0.8); }}
+
+/* --- Suggestion cards ----------------------------------------------------- */
+/* The four suggestion widgets are built on EVERY rerun. They used to be built
+   only while the transcript was empty, and that was a functional bug, not a
+   layout one: Streamlit discards the state of any widget it stops constructing,
+   so from the second question onward the cards were gone from the page and a
+   click on one bound to nothing -- `clicked` stayed None and no question was
+   ever submitted. One working card, three dead ones.
+
+   Gating them on visibility instead of on existence fixes that. The marker
+   below is what scopes these rules to this row: st.columns emits a bare
+   stHorizontalBlock with no class of ours, and the row is the only four-column
+   block on the page, so :has() on the marker is the whole identification story.
+
+   Once there is a conversation to read, the cards drop from the mockup's 96px
+   card to a compact 2x2 strip of chips -- 72px measured against 96px on the
+   landing page, question text never clipped. They stay on the page and stay
+   clickable; they simply stop being a block that sits between the newest
+   answer and the input. Removing them outright was the alternative, but a
+   display:none card cannot be clicked, and "all four cards work after the first
+   question" is the actual requirement. */
+[data-testid="stHorizontalBlock"] [data-testid="element-container"]:has(.example-row-marker) {{
+  display: none;
+}}
+[data-testid="stHorizontalBlock"]:has(.example-row-marker.is-compact)
+  .stButton > button {{
+  height: auto;
+  font-size: 0.6875rem;
+  line-height: 1.25;
+  padding: 0.3rem 0.55rem;
+  border-radius: 8px;
+  color: var(--muted);
+  background: transparent;
+  box-shadow: none;
+}}
+[data-testid="stHorizontalBlock"]:has(.example-row-marker.is-compact)
+  .stButton > button:hover {{
+  background: var(--green-tint); color: var(--green-dark);
+  border-color: rgba(5, 150, 105, 0.4); box-shadow: none;
+}}
+/* Keeping each chip's text on one line is a desktop-only instruction. Below
+   769px Streamlit's own responsive stacking is left in charge: forcing nowrap
+   and zero-basis columns there put four full questions on one line and
+   overflowed a 390px viewport sideways, which is a worse failure than a tall
+   suggestion block. */
+@media (min-width: 769px) {{
+  [data-testid="stHorizontalBlock"]:has(.example-row-marker.is-compact)
+    > [data-testid="column"],
+  [data-testid="stHorizontalBlock"]:has(.example-row-marker.is-compact)
+    > [data-testid="stColumn"] {{
+    flex: 0 0 auto !important;
+    max-width: none !important;
+  }}
+  [data-testid="stHorizontalBlock"]:has(.example-row-marker.is-compact)
+    .stButton > button {{
+    white-space: nowrap;
+  }}
+}}
 
 /* --- Chat input ----------------------------------------------------------- */
-/* Streamlit ALREADY pins the chat input: [data-testid="stBottom"] is
-   position:sticky and lives inside the main column, so natively the input
-   tracks the content column and the sidebar correctly.
+/* Streamlit ALREADY pins the chat input: [data-testid="stBottom"] is sticky and
+   lives inside the main column, so natively the input tracks the content column
+   and the sidebar correctly.
 
-   An earlier version of this file overrode that with
-   `position: fixed; left: 0; right: 0`, which looks equivalent and is not: a
-   fixed box is positioned against the VIEWPORT, so its centred inner container
-   was centred on the window instead of the content. With the 336px sidebar open
-   the input sat ~398px left of the answers it was answering. So: no positioning
-   overrides here. Only appearance. */
+   An earlier version of this file overrode that with a viewport-relative pin,
+   which looks equivalent and is not: such a box is positioned against the
+   window, so its centred inner container was centred on the window instead of
+   the content. With the sidebar open the input sat ~398px left of the answers it
+   was answering. So: no positioning overrides here. Only appearance. */
 [data-testid="stBottom"] {{
-  background: rgba(250, 250, 250, 0.96);
-  backdrop-filter: blur(8px);
+  background: rgba(255, 255, 255, 0.95);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
   border-top: 1px solid var(--border);
+  z-index: 20;
 }}
 /* Alignment. The input's painted box has to land on the same two vertical lines
    as the text above it, at every width, or the question looks like it was typed
@@ -340,7 +695,7 @@ hr {{ border-color: var(--border) !important; margin: 1.25rem 0 !important; }}
    The way to get there is to stop fighting Streamlit's box model and instead
    REPLICATE it. The main column is:
 
-       .block-container            max-width 980, margin auto, padding 0 --gutter
+       .block-container            max-width 768, margin auto, padding 0 --gutter
        > stVerticalBlockBorderWrapper   padding ~19.4px, border 1px
        > content                    <- headings, chat messages, answers
 
@@ -348,29 +703,27 @@ hr {{ border-color: var(--border) !important; margin: 1.25rem 0 !important; }}
 
        stBottomBlockContainer
        > stVerticalBlockBorderWrapper   padding ~19.4px, border 1px
-       > stChatInput                  max-width 980, margin auto
+       > stChatInput                  max-width 768, margin auto
 
    Two bugs lived in that difference:
 
    1. The input's wrapper inset was stripped (an attempt to make the input line
-      up with .block-container's PADDING EDGE at 478px). But no text is ever
-      drawn at 478 -- every heading and every chat message starts at 497, one
-      wrapper inset further in. Stripping the wrapper therefore aligned the input
-      with a line nothing else uses, leaving it 18px too wide and 18px too far
-      left. Measured as a flat -18px/+18px at every width from 320 to 1920.
-   2. Earlier still, the input was pinned with `position: fixed; left: 0;
-      right: 0`. A fixed box is positioned against the viewport, not the content
-      column, so with the 336px sidebar open it sat ~398px left of the answers.
+      up with .block-container's PADDING EDGE). But no text is ever drawn there
+      -- every heading and every chat message starts one wrapper inset further
+      in. Stripping the wrapper therefore aligned the input with a line nothing
+      else uses, leaving it 18px too wide and 18px too far left. Measured as a
+      flat -18px/+18px at every width from 320 to 1920.
+   2. Earlier still, the input was pinned against the viewport, so with the
+      sidebar open it sat ~398px left of the answers.
 
    So: give stBottomBlockContainer the same box .block-container has, leave both
    stVerticalBlockBorderWrapper elements exactly as Streamlit renders them, and
-   let the input simply fill what is left. No offsets are hardcoded -- the ~19.4px
-   comes from Streamlit's own stylesheet and will follow a version bump. If
-   Streamlit ever drops that wrapper, both columns lose the inset together and
-   still agree.
-*/
+   let the input simply fill what is left. No offsets are hardcoded -- the
+   ~19.4px comes from Streamlit's own stylesheet and will follow a version bump.
+   If Streamlit ever drops that wrapper, both columns lose the inset together
+   and still agree. */
 [data-testid="stBottomBlockContainer"] {{
-  max-width: 980px !important;
+  max-width: 768px !important;
   margin-left: auto !important;
   margin-right: auto !important;
   padding-left: var(--gutter) !important;
@@ -378,7 +731,7 @@ hr {{ border-color: var(--border) !important; margin: 1.25rem 0 !important; }}
 }}
 [data-testid="stChatInput"] {{
   max-width: none !important;
-  margin: 0.7rem 0 0.85rem 0;
+  margin: 0.75rem 0 0.75rem 0;
   padding-left: 0;
   padding-right: 0;
 }}
@@ -387,121 +740,101 @@ hr {{ border-color: var(--border) !important; margin: 1.25rem 0 !important; }}
   padding-left: 0;
   padding-right: 0;
 }}
-[data-testid="stChatInput"] textarea {{
+/* The border and the fill go on the box, not on the textarea. That box is what
+   the reader sees AND what the alignment gate measures -- it is the textarea's
+   parent -- so styling the textarea would have put a second, inset border
+   inside the painted one. The mockup's field: `rounded-xl`, `surface-300`
+   edge, `shadow-card`, and an emerald focus ring rather than a colour swap. */
+[data-testid="stChatInput"] [data-baseweb="base-input"] {{
   background: var(--card);
-  border: 1px solid var(--border);
+  border: 1px solid var(--edge);
   border-radius: 12px;
-  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
-  font-size: 0.9375rem;
-  padding: 0.65rem 0.85rem;
-  min-height: 2.75rem;
-  overflow-wrap: anywhere;
+  box-shadow: var(--shadow-card);
+  transition: border-color .15s ease, box-shadow .15s ease;
 }}
-[data-testid="stChatInput"] textarea:focus {{
+[data-testid="stChatInput"] [data-baseweb="base-input"]:focus-within {{
   border-color: var(--green);
   box-shadow: 0 0 0 3px var(--green-ring);
-  outline: none;
 }}
+[data-testid="stChatInput"] textarea {{
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  font-family: var(--sans);
+  font-size: 0.875rem;
+  color: var(--ink);
+  padding: 0.75rem 1rem;
+  min-height: 3rem;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}}
+[data-testid="stChatInput"] textarea:focus {{
+  border: none; box-shadow: none; outline: none;
+}}
+[data-testid="stChatInput"] textarea::placeholder {{ color: var(--faint); }}
 /* Disabled while a question is in flight. */
 [data-testid="stChatInput"] textarea:disabled {{ opacity: 0.6; }}
 
 /* Send button. This is the one primary action on the page, so it is the one
-   thing that wears the green fill; the example cards above deliberately stay
-   neutral for exactly that reason.
+   thing that wears the green fill; the suggestion cards above deliberately stay
+   neutral for exactly that reason. The mockup's control is `h-8 w-8 rounded-lg
+   bg-emerald-700 hover:bg-emerald-800 shadow-xs active:scale-95`.
 
    Vertical alignment was genuinely wrong and the cause was one property:
    Streamlit wraps the submit button in a flex box with `align-items: flex-end`,
-   so a 40px button sat flush to the bottom of a 46px row -- top edge 687 against
-   the textarea's 682, bottom edge 727 against its 726. It hung 2px below the
-   textarea's inner box and floated 4px off its top edge. `align-self: center` on
-   the child overrides the parent's flex-end, which is the minimal correct fix;
-   the explicit height then makes the painted button match the textarea's. */
+   so a 40px button sat flush to the bottom of a 46px row. `align-self: center`
+   on the child overrides the parent's flex-end, which is the minimal correct
+   fix; the explicit height then makes the painted button match the field's. */
 [data-testid="stChatInputSubmitButton"] {{
   align-self: center !important;
-  height: 2.25rem !important;
+  height: 2rem !important;
   min-height: 0 !important;
-  width: 2.25rem !important;
+  width: 2rem !important;
   padding: 0 !important;
-  border-radius: 10px !important;
+  border-radius: 8px !important;
   background: var(--green) !important;
   border: 1px solid var(--green) !important;
-  box-shadow: none !important;
-  transition: background-color .15s ease, border-color .15s ease;
+  box-shadow: var(--shadow-subtle) !important;
+  transition: background-color .15s ease, border-color .15s ease,
+              transform .1s ease;
 }}
 [data-testid="stChatInputSubmitButton"]:hover {{
   background: var(--green-dark) !important;
   border-color: var(--green-dark) !important;
 }}
+[data-testid="stChatInputSubmitButton"]:active {{ transform: scale(0.95); }}
 [data-testid="stChatInputSubmitButton"]:focus-visible {{
   outline: 2px solid var(--green-dark); outline-offset: 2px;
 }}
 [data-testid="stChatInputSubmitButton"] svg,
-[data-testid="stChatInputSubmitButton"] path {{ color: #fff; stroke: #fff; }}
-
-/* --- Sidebar -------------------------------------------------------------- */
-/* 21rem (336px) is Streamlit's default and it is far more than four navigation
-   rows and a four-line disclaimer need -- it was taking 23% of a 1440px screen.
-   264px still fits the longest scheme name on one line. The main column reflows
-   on its own when this changes (measured: sidebar r=264 -> main l=264,
-   main w=1176, .block-container recentres), so nothing else has to be pinned. */
-[data-testid="stSidebar"] {{
-  background: var(--card);
-  border-right: 1px solid var(--border);
-  width: 264px !important;
-  min-width: 264px !important;
-}}
-[data-testid="stSidebar"] .block-container {{ padding-top: 1.25rem; }}
-[data-testid="stSidebar"] .stMarkdown p {{ font-size: 0.8125rem; }}
-.sidebar-title {{
-  font-size: 0.6875rem; text-transform: uppercase; letter-spacing: 0.07em;
-  color: var(--faint); font-weight: 650; margin: 0 0 0.6rem 0;
-}}
-.scheme-nav {{ display: flex; flex-direction: column; gap: 2px; }}
-.scheme-item {{
-  display: flex; align-items: center; gap: 0.55rem;
-  padding: 0.45rem 0.6rem; border-radius: 8px;
-  font-size: 0.8125rem; color: var(--ink); font-weight: 450;
-  transition: background-color .14s ease;
-}}
-.scheme-item:hover {{ background: var(--green-tint); color: var(--green-dark); }}
-.scheme-glyph {{ color: var(--green); font-size: 0.6875rem; width: 0.85rem; }}
-/* The persisted disclaimer strip. Short by design -- the long form lives in the
-   header, and repeating a 60-word paragraph twice made the sidebar the most
-   visually dominant column on the page. */
-.disclaimer-strip {{
-  font-size: 0.75rem; color: var(--muted); line-height: 1.55;
-  border-top: 1px solid var(--border); padding-top: 0.8rem; margin-top: 0.5rem;
-}}
-.disclaimer-strip strong {{ color: var(--ink); font-weight: 600; }}
+[data-testid="stChatInputSubmitButton"] path {{ color: #FFFFFF; stroke: #FFFFFF; }}
 
 /* --- Status notices ------------------------------------------------------- */
-/* Muted surfaces rather than Streamlit's saturated yellow/red banners. */
-[data-testid="stAlert"] {{ border-radius: 10px; font-size: 0.875rem;
-  border: 1px solid var(--border); }}
+/* Muted surfaces rather than Streamlit's saturated yellow/red banners. The
+   refusal gets the mockup's treatment -- a white card with a rose hairline and
+   a rose title -- because a scope refusal is a real answer, not an error. */
+[data-testid="stAlert"] {{
+  border-radius: 10px; font-size: 0.8125rem;
+  border: 1px solid var(--border);
+}}
 [data-testid="stAlert"][data-baseweb="warning"] {{
   background: var(--warn-tint); color: var(--warn-ink);
-  border-color: rgba(181, 71, 8, 0.18);
+  border-color: var(--warn-edge);
 }}
 [data-testid="stAlert"][data-baseweb="error"] {{
   background: var(--danger-tint); color: var(--danger);
-  border-color: rgba(180, 35, 24, 0.18);
+  border-color: var(--danger-edge);
 }}
 [data-testid="stAlert"][data-baseweb="success"],
 [data-testid="stAlert"][data-baseweb="info"] {{
   background: var(--green-tint); color: var(--green-dark);
-  border-color: rgba(15, 157, 88, 0.18);
+  border-color: var(--green-edge);
 }}
 
 /* --- Misc ----------------------------------------------------------------- */
-/* Spinner: small and green instead of the default grey. */
+/* Spinner: small and emerald instead of the default grey. */
 [data-testid="stSpinner"] i {{ border-top-color: var(--green) !important; }}
-.loading-copy {{ font-size: 0.9375rem; color: var(--ink); line-height: 1.6; }}
-/* Expander (developer chunks) inherits card treatment. */
-[data-testid="stExpander"] {{
-  border: 1px solid var(--border); border-radius: 10px;
-  background: var(--card);
-}}
-details summary {{ font-size: 0.8125rem; color: var(--muted); }}
+details summary {{ font-size: 0.6875rem; color: var(--muted); }}
 /* Belt and braces against horizontal scroll at any width. Nothing in this app
    should ever scroll sideways. */
 html, body, .stApp {{ overflow-x: hidden; max-width: 100vw; }}
@@ -510,55 +843,35 @@ html, body, .stApp {{ overflow-x: hidden; max-width: 100vw; }}
   white-space: pre-wrap !important; word-break: break-word !important;
 }}
 
-/* --- Footer --------------------------------------------------------------- */
-/* The full PRD disclaimer, once, at the bottom of the landing page. Not in the
-   sidebar, which must stay navigation; not in the header, which must stay a
-   wordmark. There was a `.page-footer` rule here for a wrapper element that
-   nothing ever rendered -- render_footer() draws .footer-note and
-   .footer-legal directly -- so it was dead weight and has been deleted. */
-.footer-note {{
-  font-size: 0.8125rem; color: var(--ink); font-weight: 600;
-  margin-bottom: 0.35rem;
-}}
-.footer-legal {{
-  font-size: 0.75rem; color: var(--muted); line-height: 1.6;
-  max-width: 78ch;
-}}
-.footer-legal strong {{ color: var(--ink); font-weight: 600; }}
-
-/* "Read as: <resolved>" -- memory folded a pronoun into a scheme. Quiet, or it
-   reads as an error. */
-.resolve-note {{
-  font-size: 0.75rem; color: var(--faint); font-style: italic;
-  margin: -0.35rem 0 0.35rem 0;
-}}
-
 /* --- Responsive ----------------------------------------------------------- */
 @media (max-width: 768px) {{
   /* horizontal padding comes from --gutter; do not re-declare it here or the
-     two definitions drift apart (this rule used 1rem, which is 4px wider than
-     Streamlit's own 12px at 480px and under).
+     two definitions drift apart (this rule used to set 1rem, which is 4px wider
+     than Streamlit's own 12px at 480px and under).
 
      No padding-bottom override either. It used to set 1rem here, which silently
      cancelled the 1.75rem clearance above at exactly the widths where the
      newest answer is closest to the input bar. Narrower screens get the same
      clearance as wide ones. */
-  .stApp h1 {{ font-size: 1.55rem !important; }}
-  .user-bubble {{ max-width: 90%; }}
-  /* No padding override for the chat input here: --gutter already steps it to
-     16px at this breakpoint. This rule used to hardcode 0.75rem, which is 4px
-     narrower than the answer column below 768px. */
   [data-testid="stHorizontalBlock"] {{ flex-wrap: wrap; }}
   [data-testid="stHorizontalBlock"] > [data-testid="column"],
   [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {{
     min-width: 100%; flex: 1 1 100%;
   }}
+  .user-bubble {{ max-width: 100%; }}
   .footer-legal {{ max-width: none; }}
+}}
+/* The mockup hides the separator and tagline below `sm`, leaving just the
+   wordmark and the Facts-only pill. It does not restack the bar into a column,
+   so neither does this: at 320px the wordmark and the pill still fit on one
+   line, and restacking would throw away the bar's 56px silhouette. */
+@media (max-width: 640px) {{
+  .app-sep, .app-tagline {{ display: none; }}
+  .app-header {{ gap: 0.5rem; }}
 }}
 @media (max-width: 480px) {{
   /* --gutter is 12px here, which is what this rule used to set by hand. */
-  .user-bubble {{ max-width: 100%; }}
-  .source-row {{ gap: 0.25rem 0.45rem; }}
+  .source-row {{ gap: 0.3rem 0.45rem; }}
 }}
 </style>""", unsafe_allow_html=True)
 
@@ -567,7 +880,12 @@ html, body, .stApp {{ overflow-x: hidden; max-width: 100vw; }}
 
 
 def render_header() -> None:
-    """Top bar: wordmark left, tagline under it, 'Facts-only' pill right."""
+    """Top bar: wordmark, tagline, 'Facts-only' pill.
+
+    The mockup separates the tagline from the wordmark with a literal pipe and
+    hides both below `sm`. The pipe is markup here because it is a separator,
+    not a character of either label.
+    """
     st.markdown(
         f"""
 <div class="app-header">
@@ -575,7 +893,8 @@ def render_header() -> None:
     <div class="app-brand">
       <span class="brand-dot"></span>HDFC Scheme Facts
     </div>
-    <div class="app-tagline">Mutual fund facts, simply explained</div>
+    <span class="app-sep">|</span>
+    <span class="app-tagline">Mutual fund facts, simply explained</span>
   </div>
   <span class="facts-pill">Facts-only</span>
 </div>
@@ -585,30 +904,10 @@ def render_header() -> None:
 
 
 HEADER_CSS = f"""<style>
-.app-header {{
-  display: flex; align-items: flex-start; justify-content: space-between;
-  gap: 1rem; padding-bottom: 0.9rem; margin-bottom: 1rem;
-  border-bottom: 1px solid var(--border);
-}}
-.app-brand {{
-  font-size: 1.0625rem; font-weight: 650; color: var(--ink);
-  letter-spacing: -0.01em; display: flex; align-items: center; gap: 0.45rem;
-}}
-.brand-dot {{
-  width: 8px; height: 8px; border-radius: 50%;
-  background: {GREEN}; display: inline-block;
-}}
-.app-tagline {{ font-size: 0.8125rem; color: var(--muted); margin-top: 0.2rem; }}
-.facts-pill {{
-  background: {GREEN_TINT}; color: {GREEN_DARK};
-  border: 1px solid rgba(15, 157, 88, 0.22);
-  border-radius: 999px; padding: 0.28rem 0.7rem;
-  font-size: 0.75rem; font-weight: 600; white-space: nowrap;
-}}
-@media (max-width: 480px) {{
-  .app-header {{ flex-direction: column; gap: 0.6rem; }}
-  .facts-pill {{ align-self: flex-start; }}
-}}
+/* Rendered by render_header() and styled in inject_css(), so the two live
+   together. Kept as a separate sheet because the header is the one element
+   whose rules never need to know about Streamlit's DOM. */
+.app-brand {{ white-space: nowrap; }}
 </style>"""
 
 
@@ -620,8 +919,7 @@ def inject_header_css() -> None:
 
 
 def render_sidebar(show_sources: bool, memory_len: int,
-                   memory_window: int,
-                   chunks_label: str) -> "tuple":
+                   memory_window: int, chunks_label: str) -> "tuple":
     """Compact navigation column. Returns (show_sources, clear_requested).
 
     The debug controls live in a collapsed expander: they are genuinely useful
@@ -631,21 +929,29 @@ def render_sidebar(show_sources: bool, memory_len: int,
     This function draws and reads widget state. It never touches memory or the
     transcript; clearing them is the caller's decision.
     """
-    st.markdown('<div class="sidebar-title">HDFC Schemes</div>',
-                unsafe_allow_html=True)
+    st.markdown(
+        f'<div class="sidebar-head">'
+        f'<span class="sidebar-title">HDFC Schemes</span>'
+        f'<span class="sidebar-count">{len(SIDEBAR_SCHEMES)} Tracked</span>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
 
     items = "".join(
         f'<div class="scheme-item"><span class="scheme-glyph">'
-        f'{SCHEME_GLYPHS[name]}</span><span>{html.escape(name)}</span></div>'
+        f'{SCHEME_GLYPHS[name]}</span>'
+        f'<span>{html.escape(name)}</span>'
+        f'<span class="scheme-tag">{html.escape(SCHEME_TAGS[name])}</span>'
+        f'</div>'
         for name in SIDEBAR_SCHEMES
     )
     st.markdown(f'<div class="scheme-nav">{items}</div>',
                 unsafe_allow_html=True)
 
     st.markdown(
-        f'<div class="disclaimer-strip"><strong>Facts-only.</strong> '
-        f'No investment advice. Facts come only from 5 public scheme pages and '
-        f'every answer links its source.</div>',
+        f'<div class="disclaimer-strip"><strong>Facts-only. No advice.</strong>'
+        f'Facts come exclusively from {len(SIDEBAR_SCHEMES)} public scheme pages '
+        f'&amp; fact sheets.</div>',
         unsafe_allow_html=True,
     )
 
@@ -679,13 +985,33 @@ def _escape(text: str) -> str:
 def render_suggestion_label(first_visit: bool) -> None:
     """Muted label above the example cards.
 
-    Short on the landing page, omitted once a conversation exists so the cards
-    do not compete with the transcript above them.
+    The mockup's header is a two-sided row: an uppercase label and a hint that
+    the cards are live. Both are inert text with no click to lose, so gating
+    them on the empty transcript is free -- unlike the cards themselves.
     """
     if not first_visit:
         return
-    st.markdown('<div class="suggest-label">Try one of these</div>',
-                unsafe_allow_html=True)
+    st.markdown(
+        '<div class="suggest-head">'
+        '<span class="suggest-label">Try one of these</span>'
+        '<span class="suggest-hint">Click to ask instantly</span>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def render_suggestion_marker(first_visit: bool) -> None:
+    """Zero-size marker that tells CSS which row is the suggestion row.
+
+    Rendered inside the first suggestion column on every run, so the compact
+    rules in inject_css() can find this row through :has() and leave every other
+    column block alone. `first_visit` only picks the class: the element itself
+    always exists, because the cards beside it always exist.
+    """
+    cls = "example-row-marker"
+    if not first_visit:
+        cls += " is-compact"
+    st.markdown(f'<div class="{cls}"></div>', unsafe_allow_html=True)
 
 
 def render_resolution_note(resolved_question: str) -> None:
@@ -704,23 +1030,40 @@ def render_footer_note(note: str) -> None:
 _BOLD = re.compile(r"\*\*(.+?)\*\*")
 
 
-def render_trusted_markdown(text: str, css_class: str = "footer-legal") -> None:
+def _trusted_html(text: str) -> str:
+    """Escape, then re-enable just `**bold**`.
+
+    The escape-then-reopen pattern only works because the input is a literal in
+    this file. Never call it with model output, retrieval text, or anything a
+    user typed -- those go through st.markdown() with unsafe_allow_html left
+    off, or through _escape().
+    """
+    return _BOLD.sub(lambda m: f"<strong>{m.group(1)}</strong>", _escape(text))
+
+
+def render_trusted_markdown(text: str, css_class: str = "footer-legal",
+                            highlight: str = "") -> None:
     """Render markdown for a REPO CONSTANT only (e.g. DISCLAIMER, WELCOME).
 
-    Escapes first, then re-enables just `**bold**`. Accepting this as an
-    escape-then-reopen pattern only works because the input is a literal in this
-    file. Never call it with model output, retrieval text, or anything a user
-    typed -- those go through st.markdown() with unsafe_allow_html left off, or
-    through _escape().
+    `highlight` wraps one exact phrase in an emerald span, which is how the
+    welcome line gets the mockup's "Facts-only. No investment advice." accent
+    without the copy itself having to carry markup.
     """
-    body = _BOLD.sub(lambda m: f"<strong>{m.group(1)}</strong>", _escape(text))
+    body = _trusted_html(text)
+    if highlight and highlight in body:
+        body = body.replace(
+            _escape(highlight), f'<span class="accent">{_escape(highlight)}</span>'
+        )
     st.markdown(f'<div class="{css_class}">{body}</div>',
                 unsafe_allow_html=True)
 
 
 def render_user_bubble(text: str) -> None:
-    """Right-aligned tinted pill. The wrapper container is the chat message body;
-    the bubble itself is the styled inline block."""
+    """Right-aligned slate bubble with the assistant-facing corner squared off.
+
+    The wrapper container is the chat message body; the bubble itself is the
+    styled inline block.
+    """
     st.markdown(
         f'<div class="user-bubble">{_escape(text)}</div>',
         unsafe_allow_html=True,
@@ -738,12 +1081,16 @@ def _scheme_label(chunks: Optional[Sequence], answer) -> str:
 
 def render_source_row(source_url: str, last_updated: str,
                       scheme_label: str = "") -> None:
-    """Compact, non-repeating citation.
+    """Compact, non-repeating citation, in the mockup's citation-box shape.
 
     The full URL is preserved verbatim -- it is the same string the pipeline
     produced, attached to the same anchor. Only the presentation changed: the
     long address is no longer printed inline, which is what removed the
     horizontal overflow. `title` keeps it available on hover.
+
+    The Verified Fact badge is emitted only when there is an address to point
+    at, so it asserts what the pipeline already established (the answer came
+    back grounded and cited) rather than adding a new claim.
     """
     if not source_url:
         if last_updated:
@@ -755,20 +1102,21 @@ def render_source_row(source_url: str, last_updated: str,
         return
 
     safe_url = _escape(source_url)
-    meta = _escape(scheme_label) if scheme_label else "Groww"
+    subject = _escape(scheme_label) if scheme_label else "the indexed page"
+    provenance = (
+        f'<span class="source-meta">Disclosed</span>'
+        f'<span class="source-date">{_escape(last_updated)}</span>'
+        if last_updated
+        else ""
+    )
     st.markdown(
         f'<div class="source-row">'
-        f'<span class="source-label">Source</span>'
         f'<a class="source-link" href="{safe_url}" target="_blank" '
-        f'rel="noopener noreferrer" title="{safe_url}">View source ↗</a>'
-        f'<span class="source-meta">· {meta}</span>'
-        f'</div>'
-        + (
-            f'<div class="source-date">Last updated from sources: '
-            f'{_escape(last_updated)}</div>'
-            if last_updated
-            else ""
-        ),
+        f'rel="noopener noreferrer" title="{safe_url}">'
+        f'<span class="source-label">Source:</span> {subject} ↗</a>'
+        f'<span class="verified-pill">Verified Fact</span>'
+        f'{provenance}'
+        f'</div>',
         unsafe_allow_html=True,
     )
 
@@ -838,43 +1186,110 @@ def render_answer_card(text: str) -> None:
 
 
 def render_loading() -> None:
-    """Polite loading copy. No pipeline jargon (embedding, vector search, ...)."""
+    """The mockup's generating state: a spinner line, then shimmering bars.
+
+    No pipeline jargon in the copy (embedding, vector search, ...), and the
+    shimmer is three fixed-width bars rather than a real skeleton of the answer:
+    the widths are decorative and nothing about them is load-bearing.
+    """
     with st.container(border=True):
         st.markdown(
-            '<div class="loading-copy">Finding the relevant scheme facts…</div>',
+            '<div class="loading-copy">'
+            '<span class="loading-spin"></span>'
+            'Searching official HDFC scheme disclosure &amp; factsheets…'
+            '</div>'
+            '<div class="shimmer">'
+            '<div class="shimmer-line" style="width:83%"></div>'
+            '<div class="shimmer-line" style="width:75%"></div>'
+            '<div class="shimmer-line" style="width:50%"></div>'
+            '</div>',
             unsafe_allow_html=True,
         )
 
 
 def render_status(kind: str, message: str) -> None:
     """Status strip under an answer: refused / not-found / provider error."""
-    classes = {
-        "refused": ("notice-refused", "Refused before the model was called. "
-                    "Nothing left your machine."),
-        "not_found": ("notice-notfound", "Not found in the indexed pages."),
-        "error": ("notice-error", "The model provider did not respond in time. "
-                  "This is not a problem with your question or with the indexed "
-                  "data — try again."),
+    entries = {
+        "refused": (
+            "notice-refused", "Query outside scope",
+            "This asks for advice or a prediction rather than a scheme fact, so "
+            "it was refused before the model was called. Nothing left your "
+            "machine.",
+        ),
+        "not_found": (
+            "notice-notfound", "Not found in the indexed pages",
+            "Try naming the scheme and the fact, e.g. “What is the exit load "
+            "on HDFC Small Cap?”",
+        ),
+        "error": (
+            "notice-error", "The model provider did not respond in time",
+            "This is not a problem with your question or with the indexed data "
+            "— try again.",
+        ),
     }
-    css, text = classes.get(kind, ("notice-generic", message))
+    css, title, body = entries.get(kind, ("notice-generic", "", message))
     st.markdown(
-        f'<div class="notice {css}">{_escape(text)}</div>',
+        f'<div class="notice {css}">'
+        f'<span class="notice-title">{_escape(title)}</span>'
+        f'<span class="notice-body">{_escape(body)}</span>'
+        f'</div>',
         unsafe_allow_html=True,
     )
 
 
 STATUS_CSS = f"""<style>
+/* A status strip is an answer, not an alarm: a title line and a quiet body,
+   on the mockup's card shape. The refusal wears a rose hairline because a
+   scope refusal is the one status a reader must not have to notice. */
 .notice {{
-  margin-top: 0.6rem; padding: 0.55rem 0.8rem;
-  border-radius: 8px; font-size: 0.8125rem; line-height: 1.5;
-  border: 1px solid var(--border); color: var(--muted); background: #FBFBFC;
+  margin-top: 0.6rem; padding: 0.875rem 1rem;
+  border-radius: 12px; border: 1px solid var(--border);
+  background: var(--surface); color: var(--muted);
+  font-size: 0.75rem; line-height: 1.6;
+  box-shadow: var(--shadow-subtle);
 }}
-.notice-refused {{ background: var(--green-tint);
-  border-color: rgba(15,157,88,0.2); color: var(--green-dark); }}
-.notice-notfound {{ background: var(--warn-tint);
-  border-color: rgba(181,71,8,0.18); color: var(--warn-ink); }}
-.notice-error {{ background: var(--danger-tint);
-  border-color: rgba(180,35,24,0.18); color: var(--danger); }}
+.notice-title {{ display: block; font-weight: 600; margin-bottom: 0.25rem; }}
+.notice-body {{ display: block; color: var(--muted); }}
+.notice-refused {{
+  background: var(--card); border-color: var(--danger-edge);
+}}
+.notice-refused .notice-title {{ color: var(--danger); }}
+.notice-notfound {{
+  background: var(--warn-tint); border-color: var(--warn-edge);
+}}
+.notice-notfound .notice-title {{ color: var(--warn-ink); }}
+.notice-error {{
+  background: var(--danger-tint); border-color: var(--danger-edge);
+}}
+.notice-error .notice-title {{ color: var(--danger); }}
+
+/* The generating state. A CSS ring rather than an <svg>, because markdown
+   sanitising drops inline SVG and a dropped spinner is a dropped spinner. */
+.loading-copy {{
+  display: flex; align-items: center; gap: 0.5rem;
+  font-size: 0.75rem; font-weight: 500; color: var(--green-dark);
+  animation: loading-breathe 1.8s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}}
+.loading-spin {{
+  flex-shrink: 0; width: 0.875rem; height: 0.875rem;
+  border: 2px solid rgba(5, 150, 105, 0.25);
+  border-top-color: var(--green-mid); border-radius: 999px;
+  animation: loading-spin 0.8s linear infinite;
+}}
+@keyframes loading-spin {{ to {{ transform: rotate(360deg); }} }}
+@keyframes loading-breathe {{
+  0%, 100% {{ opacity: 1; }}
+  50% {{ opacity: 0.45; }}
+}}
+.shimmer {{ display: flex; flex-direction: column; gap: 0.5rem;
+  padding-top: 0.75rem; }}
+.shimmer-line {{
+  height: 0.75rem; border-radius: 999px; background: var(--surface);
+  animation: shimmer-pulse 1.6s ease-in-out infinite;
+}}
+.shimmer-line:nth-child(2) {{ animation-delay: 0.15s; }}
+.shimmer-line:nth-child(3) {{ animation-delay: 0.3s; }}
+@keyframes shimmer-pulse {{ 0%, 100% {{ opacity: 1; }} 50% {{ opacity: 0.5; }} }}
 </style>"""
 
 
@@ -898,49 +1313,131 @@ def render_chunks(chunks: List) -> None:
 def render_page_heading(intro: str = "") -> None:
     """Hero block shown only while the conversation is empty.
 
-    Two lines with different jobs: the sub-line says what you can ask, the intro
-    says what this is and where the facts come from. Merging them into one
-    paragraph was what made the old landing block read as a paragraph of
-    developer copy.
+    The mockup's landing hero is four pieces in a fixed order: an eyebrow pill
+    with a status dot, the 30/36px wordmark, a one-line summary of what you can
+    ask, and then an inset panel that introduces the assistant in its own voice.
+    Merging any two of them was what made an earlier version read as a paragraph
+    of developer copy.
     """
     st.markdown(
+        '<div class="page-eyebrow">'
+        '<span class="page-eyebrow-dot"></span>'
+        'Official Fact-Grounding Engine'
+        '</div>'
         '<div class="page-h1">HDFC Scheme Facts</div>'
         '<div class="page-sub">Ask about expense ratio, exit load, SIP minimum, '
         'benchmark, riskometer and more.</div>',
         unsafe_allow_html=True,
     )
     if intro:
-        render_trusted_markdown(intro, css_class="page-intro")
+        render_trusted_markdown(intro, css_class="page-intro",
+                                highlight="Facts-only. No investment advice.")
 
 
 PAGE_CSS = f"""<style>
-/* Hero rhythm. Measured on the landing page: the five blocks from the wordmark
-   to the suggestion label carried 22.4 + 5.6 + 21.6 + 25.6 + 9.6px of margins
-   between them. Trimmed without removing anything. */
-.page-h1 {{
-  font-size: 2rem; font-weight: 650; color: var(--ink);
-  letter-spacing: -0.02em; line-height: 1.2; margin-bottom: 0.3rem;
+/* Hero rhythm, from the mockup's `space-y-8` on the landing block. */
+.page-eyebrow {{
+  display: inline-flex; align-items: center; gap: 0.5rem;
+  padding: 0.25rem 0.625rem; border-radius: 999px;
+  background: var(--surface); color: var(--muted);
+  font-size: 0.75rem; font-weight: 500; margin-bottom: 0.75rem;
 }}
-.page-sub {{ font-size: 0.9375rem; color: var(--muted); margin-bottom: 0.9rem;
-  line-height: 1.55; }}
+.page-eyebrow-dot {{
+  width: 6px; height: 6px; border-radius: 999px; background: var(--green-mid);
+}}
+.page-h1 {{
+  font-size: 1.875rem; font-weight: 700; color: var(--ink);
+  letter-spacing: -0.025em; line-height: 1.2; margin-bottom: 0.5rem;
+}}
+@media (min-width: 640px) {{ .page-h1 {{ font-size: 2.25rem; }} }}
+.page-sub {{
+  font-size: 1rem; color: var(--muted); margin-bottom: 1.25rem;
+  line-height: 1.55; max-width: 46ch;
+}}
 .page-intro {{
-  font-size: 0.875rem; color: var(--muted); line-height: 1.62;
-  max-width: 68ch; margin-bottom: 1.1rem;
+  font-size: 0.75rem; color: var(--muted); line-height: 1.65;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 12px; padding: 0.875rem; max-width: none; margin-bottom: 0;
 }}
 .page-intro strong {{ color: var(--ink); font-weight: 600; }}
-.suggest-label {{
-  font-size: 0.6875rem; text-transform: uppercase; letter-spacing: 0.07em;
-  color: var(--faint); font-weight: 650; margin: 0 0 0.6rem 0;
+.accent {{ color: var(--green-dark); font-weight: 500; }}
+.suggest-head {{
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 0.75rem; margin: 1.5rem 0 0.75rem 0;
 }}
+.suggest-label {{
+  font-size: 0.6875rem; text-transform: uppercase; letter-spacing: 0.075em;
+  color: var(--faint); font-weight: 600; margin: 0;
+}}
+.suggest-hint {{ font-size: 0.6875rem; color: var(--faint); }}
 @media (max-width: 768px) {{
-  .page-h1 {{ font-size: 1.55rem; }}
-  .page-sub {{ font-size: 0.875rem; }}
+  .page-sub {{ font-size: 0.9375rem; }}
+  .suggest-hint {{ display: none; }}
 }}
 </style>"""
 
 
 def inject_page_css() -> None:
     st.markdown(PAGE_CSS, unsafe_allow_html=True)
+
+
+def render_compliance_banner(title: str, body: str) -> None:
+    """The mockup's mandatory compliance banner, as ONE element.
+
+    The mockup's banner is a single rounded box holding a bold lead line above
+    a paragraph. In Streamlit those two are separate widgets -- two markdown
+    calls produce two sibling containers -- so drawing them as one box means
+    emitting one element. Both are in one st.markdown() call on purpose: an
+    element opened in one call and closed in another does not nest, because each
+    markdown block is sanitised and rendered independently.
+
+    `body` is passed verbatim. The leading bold restatement of `title` is
+    dropped here rather than at the call site, so the PRD copy stays verbatim
+    and there is exactly one place deciding not to print the same sentence
+    twice.
+    """
+    lead = f"**{title}**"
+    text = body[len(lead):].lstrip() if body.startswith(lead) else body
+    st.markdown(
+        f'<div class="compliance-banner">'
+        f'<div class="footer-note compliance-title">'
+        f'<span class="compliance-mark">i</span>{_escape(title)}</div>'
+        f'<p class="footer-legal compliance-body">{_trusted_html(text)}</p>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+
+COMPLIANCE_CSS = f"""<style>
+/* The mockup's banner: a hairline box on a 60%-white slate field, with the
+   lead line set in ink and the paragraph left at the muted tone. */
+.compliance-banner {{
+  border: 1px solid rgba(226, 232, 240, 0.8);
+  background: rgba(241, 245, 249, 0.6);
+  border-radius: 12px; padding: 1rem; margin-top: 2rem;
+  max-width: 78ch;
+}}
+.compliance-title {{
+  display: flex; align-items: center; gap: 0.375rem;
+  font-size: 0.75rem; font-weight: 600; color: var(--ink); margin-bottom: 0.35rem;
+}}
+.compliance-mark {{
+  flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center;
+  width: 1rem; height: 1rem; border-radius: 999px;
+  background: var(--green-dark); color: #FFFFFF;
+  font-family: var(--sans); font-size: 0.6875rem; font-weight: 700; line-height: 1;
+}}
+.compliance-body {{
+  font-size: 0.6875rem; color: var(--muted); line-height: 1.65; margin: 0;
+  max-width: none;
+}}
+.compliance-body strong {{ color: var(--ink); font-weight: 600; }}
+@media (max-width: 768px) {{ .compliance-banner {{ padding: 0.875rem; }} }}
+</style>"""
+
+
+def inject_compliance_css() -> None:
+    st.markdown(COMPLIANCE_CSS, unsafe_allow_html=True)
 
 
 def render_persistent_note(text: str) -> None:
@@ -1124,11 +1621,15 @@ def scroll_to_latest() -> None:
 
 
 __all__ = [
-    "GREEN", "GREEN_DARK", "GREEN_TINT", "INK", "MUTED", "BORDER", "CARD",
-    "PAGE", "SIDEBAR_SCHEMES", "SCHEME_GLYPHS",
+    "GREEN", "GREEN_DARK", "GREEN_MID", "GREEN_TINT", "GREEN_EDGE", "INK",
+    "BODY", "MUTED", "FAINT", "BORDER", "EDGE", "SURFACE", "CARD", "PAGE",
+    "DANGER", "DANGER_TINT", "DANGER_EDGE", "WARN_TINT", "WARN_INK",
+    "SIDEBAR_SCHEMES", "SCHEME_GLYPHS", "SCHEME_TAGS",
     "inject_css", "inject_header_css", "inject_status_css", "inject_page_css",
+    "inject_compliance_css",
     "render_header", "render_sidebar", "render_user_bubble", "render_source_row",
     "render_answer_card", "render_loading", "render_status", "render_chunks",
-    "render_page_heading", "render_suggestion_label", "render_resolution_note",
+    "render_page_heading", "render_suggestion_label", "render_suggestion_marker",
+    "render_resolution_note", "render_compliance_banner",
     "render_footer_note", "render_trusted_markdown", "scroll_to_latest",
 ]

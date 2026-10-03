@@ -203,6 +203,14 @@ def _scheme_label(chunks: Optional[List[RetrievedChunk]]) -> str:
 def render_footer() -> None:
     """Full disclaimer, once, at the foot of the LANDING page.
 
+    One banner element, not two widgets. The Stitch design draws the compliance
+    notice as a single rounded box holding a lead line above a paragraph, and
+    Streamlit wraps each st.markdown() call in its own container -- so drawing
+    the box needs the whole thing in one call. Both constants are passed through
+    verbatim; ui.render_compliance_banner drops the body's restatement of the
+    lead line so the sentence is not printed twice, which is a display decision
+    and leaves DISCLAIMER exactly as the PRD wrote it.
+
     Kept out of the sidebar so the sidebar stays navigation. Kept on the page so
     it cannot be cropped away with the sidebar.
 
@@ -215,8 +223,7 @@ def render_footer() -> None:
     the header carries the facts-only pill and the sidebar carries the short
     strip -- so nothing became unreachable when this stopped repeating.
     """
-    ui.render_footer_note(PERSISTENT_NOTE)
-    ui.render_trusted_markdown(DISCLAIMER)
+    ui.render_compliance_banner(PERSISTENT_NOTE, DISCLAIMER)
 
 
 def main() -> None:
@@ -232,6 +239,7 @@ def main() -> None:
     ui.inject_header_css()
     ui.inject_page_css()
     ui.inject_status_css()
+    ui.inject_compliance_css()
 
     ui.render_header()
 
@@ -304,20 +312,30 @@ def main() -> None:
     # so the click set a key nobody read and the rerun discarded it. The three
     # buttons on the landing page did nothing at all.
     #
-    # Landing page only, for the same reason the hero is: they used to be drawn
-    # after every turn as well, which put a 214px block of suggestion cards
-    # between the newest answer and the question box. That is the dead zone the
-    # chat is supposed to not have -- the answer has to be the last thing above
-    # the input. Once there is a conversation to read, the input is the only
-    # thing that belongs down there.
+    # Every widget here is built on EVERY rerun, which is the fix for a bug that
+    # looked like an AI problem and was not one. These were previously gated on
+    # `if first_visit:`, because drawn after every turn they put a 214px block
+    # of cards between the newest answer and the input. But Streamlit discards
+    # the state of a widget it stops constructing, so from the second question
+    # onward the cards were not on the page at all and a click on one bound to
+    # nothing: `clicked` stayed None, no question was submitted, and the app
+    # looked broken. One card worked, three were dead, and it read as "the
+    # suggested questions give the wrong answers".
+    #
+    # Visibility is now CSS's job, not Python's. The marker is what identifies
+    # the row; when a conversation exists the cards render as a compact 2x2
+    # strip instead of the 214px landing grid. They are never un-constructed,
+    # so every one of them is clickable on the first question and on the tenth.
     clicked: Optional[str] = None
-    if first_visit:
-        ui.render_suggestion_label(first_visit=first_visit)
-        columns = st.columns(len(EXAMPLE_QUESTIONS))
-        for column, example in zip(columns, EXAMPLE_QUESTIONS):
-            if column.button(example, key=f"example_{example[:20]}",
-                             use_container_width=True):
-                clicked = example
+    ui.render_suggestion_label(first_visit=first_visit)
+    columns = st.columns(len(EXAMPLE_QUESTIONS))
+    with columns[0]:
+        # Inside the first column, so :has() finds this row and no other row.
+        ui.render_suggestion_marker(first_visit=first_visit)
+    for column, example in zip(columns, EXAMPLE_QUESTIONS):
+        if column.button(example, key=f"example_{example[:20]}",
+                         use_container_width=True):
+            clicked = example
 
     typed = st.chat_input(
         "Ask a scheme fact, e.g. What is the benchmark of HDFC Flexi Cap?"

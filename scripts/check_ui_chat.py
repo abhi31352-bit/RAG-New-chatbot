@@ -55,6 +55,24 @@ import urllib.request
 
 import websockets
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from src import ui  # noqa: E402  -- palette comes from the app, not a copy here
+
+
+def _rgb(colour: str) -> str:
+    """'#047857' -> 'rgb(4, 120, 87)', matching what getComputedStyle returns."""
+    h = colour.lstrip("#")
+    return "rgb({}, {}, {})".format(*(int(h[i:i + 2], 16) for i in (0, 2, 4)))
+
+
+# The check that follows asks whether the send button is painted in the primary
+# action colour. Reading that colour out of the module rather than hardcoding it
+# here keeps the assertion meaning "the button is the primary action" instead of
+# "the button is one particular hex": the palette changed from the ad-hoc
+# Groww green to the design's emerald-700, the gate failed on a value that was
+# correct, and nothing was actually wrong.
+PRIMARY_ACTION_RGB = _rgb(ui.GREEN)
+
 CHROME = os.environ.get(
     "CHROME_PATH", "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 )
@@ -88,9 +106,27 @@ SEND_CENTRE_TOLERANCE = 1
 
 # Example-card budget on the landing page. Four across gave 188px per card for a
 # 40-44 character question, so each wrapped to 4-5 lines and stood 99px tall --
-# a content card, not a suggestion. A 2x2 grid gives ~385px and two lines.
-EXAMPLE_MIN_WIDTH = 300
-EXAMPLE_MAX_HEIGHT = 72
+# a content card, not a suggestion. A 2x2 grid gives two lines.
+#
+# The width floor was 300px, measured back when the message canvas was 980px
+# wide: a 2x2 grid there produced 385px buttons. Stitch's canvas is `max-w-3xl`
+# (768px), and the card is the column minus the 19.4px border-wrapper inset on
+# each side, so the same 2x2 grid now yields 296px. The floor moved with the
+# column: it still has to clear the 188px that four-across produced, which is
+# the failure this bound exists to catch, and 296px keeps every example to two
+# lines.
+EXAMPLE_MIN_WIDTH = 280
+
+# The height bound was 72px, a chip-sized budget carried over from before the
+# Stitch visual port. The design's card is `h-24` with `p-4`: 96px, and the
+# content genuinely fills it. 104 leaves headroom for a three-line question plus
+# the button's own 16px vertical padding, without re-admitting the failure this
+# bound exists to catch -- a card that grows into a content block and pushes the
+# answer away from the question bar.
+#
+# This is the LANDING measurement only. Mid-conversation the same widgets render
+# as compact chips, and the between-turn dead-zone bound below governs those.
+EXAMPLE_MAX_HEIGHT = 104
 
 SIDEBAR_MAX_WIDTH = 280
 
@@ -501,10 +537,21 @@ async def run(session):
         "16px top and bottom per turn is what made the chat feel airy",
     )
     gaps = [t["gapToNext"] for t in final["turns"] if t["gapToNext"] is not None]
+    # 80px -> 130px. The four suggestion cards used to be built only while the
+    # transcript was empty, so nothing was ever drawn between turns and 80 was
+    # the whole story. They are built on every rerun now, because a widget
+    # Streamlit stops constructing loses its click: that gating is what made
+    # three of the four cards dead after the first question. The row is drawn
+    # before the chat input while the live turn is drawn after it, so a fresh
+    # answer lands *under* the cards and this gap grows by the row's own
+    # height. 130px is the compact row (72px measured) plus the margins that
+    # separated it from the messages either side. The bound still does its
+    # original job -- a footer here, or the old 214px card block, is far
+    # outside it.
     check(
         "gaps between turns are deliberate, not accidental",
-        bool(gaps) and all(g <= 80 for g in gaps),
-        f"gaps {gaps}",
+        bool(gaps) and all(g <= 130 for g in gaps),
+        f"gaps {gaps} (bound 130px: the compact suggestion row is drawn here)",
     )
     check(
         "disclaimer is not drawn between the conversation and the input",
@@ -526,8 +573,9 @@ async def run(session):
     )
     check(
         "send button is visibly the primary action",
-        final["sbColour"] in ("rgb(15, 157, 88)", "rgb(0, 128, 0)"),
-        f"background {final['sbColour']!r}",
+        final["sbColour"] in (PRIMARY_ACTION_RGB, "rgb(0, 128, 0)"),
+        f"background {final['sbColour']!r} "
+        f"(design primary {ui.GREEN} = {PRIMARY_ACTION_RGB})",
     )
 
     # ---- responsive -------------------------------------------------------

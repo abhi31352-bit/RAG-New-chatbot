@@ -196,12 +196,23 @@ async def main() -> int:
 
             # Streamlit hydrates over a websocket. Poll for real content rather
             # than sleeping a fixed amount.
+            #
+            # Two elements, not one, and the second is the point. .app-header is
+            # drawn before warm_up(), which loads the embedder and the Chroma
+            # store and blocks for seconds on a cold process. Everything after
+            # it -- the hero, the suggestion cards, the compliance banner at the
+            # foot of the column -- lands only once that returns. Waiting on the
+            # header alone and then sleeping 2s measured a half-built page on a
+            # cold start, and it reported a missing class for an element that
+            # was merely late. .compliance-banner is drawn last in the idle
+            # branch, so its presence means the column is finished.
             ready = False
-            for _ in range(60):
+            for _ in range(90):
                 await asyncio.sleep(1)
                 try:
                     ok = await s.evaluate(
-                        "!!document.querySelector('.app-header')"
+                        "!!document.querySelector('.app-header') && "
+                        "!!document.querySelector('.compliance-banner')"
                     )
                 except Exception:
                     continue
@@ -209,11 +220,12 @@ async def main() -> int:
                     ready = True
                     break
             if not ready:
-                print("FAIL: the app never rendered .app-header")
+                print("FAIL: the app never rendered .app-header "
+                      "and .compliance-banner")
                 return 1
             print("PASS: app hydrated, .app-header present")
 
-            # Let the welcome text and example cards settle.
+            # Let the example cards finish streaming in behind the banner.
             await asyncio.sleep(2)
 
             found = await s.evaluate(
